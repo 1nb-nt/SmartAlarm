@@ -5,8 +5,10 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.provider.AlarmClock
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -150,9 +152,20 @@ fun ChatScreen() {
                         // parsing failed despite regex match -> message
                         messageList.add(0, "⚠️ Could not parse time \"$extracted\"")
                     }
-                } else {
-                    messageList.add(0, "💬 $rawText")
                 }
+                if(
+                    rawText.startsWith("navigate to", ignoreCase = true) ||
+                    rawText.startsWith("open map", ignoreCase = true) ) {
+                    val locationQuery = rawText.substringAfter("to").trim()
+                    Log.d("ChatScreen", "Location query: $locationQuery")
+                    if (locationQuery.isNotEmpty()) {
+                        openLocationInGoogleMaps(context, locationQuery)
+                        messageList.add(0, "🗺 Opening location: $locationQuery")
+                    } else {
+                        messageList.add(0, "⚠️ No location specified")
+                    }
+                }
+
                 input = TextFieldValue("")
             }) {
                 Icon(Icons.Default.Send, contentDescription = "Send")
@@ -246,5 +259,30 @@ private fun setAlarmCrossDevice(context: Context, label: String, hour: Int, minu
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "Failed to request alarm: ${e.message}", Toast.LENGTH_LONG).show()
+    }
+}
+private fun openLocationInGoogleMaps(context: Context, locationName: String) {
+    try {
+        val gmmIntentUri = android.net.Uri.parse("geo:0,0?q=${Uri.encode(locationName)}")
+        val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
+            setPackage("com.google.android.apps.maps") // Prefer Google Maps
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (mapIntent.resolveActivity(context.packageManager) != null) {
+            context.startActivity(mapIntent)
+        } else {
+            // fallback: try without specifying package
+            val fallbackIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (fallbackIntent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(fallbackIntent)
+            } else {
+                Toast.makeText(context, "No map app found to handle this request", Toast.LENGTH_LONG).show()
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "Error opening map: ${e.message}", Toast.LENGTH_LONG).show()
     }
 }
