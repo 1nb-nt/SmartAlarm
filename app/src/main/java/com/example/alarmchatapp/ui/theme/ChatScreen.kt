@@ -263,26 +263,33 @@ private fun setAlarmCrossDevice(context: Context, label: String, hour: Int, minu
 }
 private fun openLocationInGoogleMaps(context: Context, locationName: String) {
     try {
-        val gmmIntentUri = android.net.Uri.parse("geo:0,0?q=${Uri.encode(locationName)}")
+        Log.d("ChatScreen", "Opening location: $locationName")
+        val gmmIntentUri = Uri.parse("geo:0,0?q=${Uri.encode(locationName)}")
+        Log.d("ChatScreen", "gmmIntentUri: $gmmIntentUri")
+
+        // Try without package restriction first
         val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
-            setPackage("com.google.android.apps.maps") // Prefer Google Maps
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         if (mapIntent.resolveActivity(context.packageManager) != null) {
             context.startActivity(mapIntent)
-        } else {
-            // fallback: try without specifying package
-            val fallbackIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            if (fallbackIntent.resolveActivity(context.packageManager) != null) {
-                context.startActivity(fallbackIntent)
-            } else {
-                Toast.makeText(context, "No map app found to handle this request", Toast.LENGTH_LONG).show()
-            }
+            return
         }
+
+        // If you specifically want Google Maps:
+        val googleMapsIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
+            setPackage("com.google.android.apps.maps")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (googleMapsIntent.resolveActivity(context.packageManager) != null) {
+            context.startActivity(googleMapsIntent)
+            return
+        }
+
+        Toast.makeText(context, "No map app found", Toast.LENGTH_LONG).show()
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "Error opening map: ${e.message}", Toast.LENGTH_LONG).show()
     }
 }
+
