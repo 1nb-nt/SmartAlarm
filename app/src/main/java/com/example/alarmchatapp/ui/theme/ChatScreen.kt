@@ -30,13 +30,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
-import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.work.workDataOf
-import com.example.alarmchatapp.My24HourWorker
+import com.example.alarmchatapp.AppDatabase
 import com.example.alarmchatapp.R
+import com.example.alarmchatapp.ScheduledTask
+import com.example.alarmchatapp.TaskExecutionWorker
 import com.example.alarmchatapp.utils.AlarmHelper
 import com.example.alarmchatapp.utils.LocationUtils
+import kotlinx.coroutines.launch
 import java.text.ParseException
 import java.text.SimpleDateFormat
 import java.util.*
@@ -46,14 +49,18 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun ChatScreen() {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val messageList = remember { mutableStateListOf<String>() }
     var input by remember { mutableStateOf(TextFieldValue("")) }
 
+    // --- Permission and Periodic Work Setup ---
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) {}
-    LaunchedEffect(Unit) { locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) }
-
+    LaunchedEffect(Unit) {
+        locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        schedulePeriodicTaskChecker(context) // Schedule the periodic checker
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         val notifyLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestPermission()
@@ -92,20 +99,16 @@ fun ChatScreen() {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Styled Prompt Text
             Text(
                 text = "What You Want to be notified at",
                 color = Color.White,
                 style = MaterialTheme.typography.headlineSmall,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
-
-            // Quick options buttons
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                 Button(onClick = {
                     val raw = "Wake up"
-                    val parsed = "07:00"
-                    val (h, m) = parseHourMinute(parsed)
+                    val (h, m) = parseHourMinute("07:00")
                     if (h != null && m != null) {
                         setAlarmCrossDevice(context, raw, h, m)
                         messageList.add(0, "✅ Requested alarm 07:00")
@@ -128,16 +131,6 @@ fun ChatScreen() {
                     messageList.add(0, "🔌 Connected tools — ${loc ?: "Location unavailable"}")
                 }) { Text("Connect tools") }
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // --- NEW: WorkManager Button ---
-            Button(onClick = {
-                schedule24HourWork(context)
-                messageList.add(0, "✅ Daily background work scheduled for the next 24 hours.")
-            }) {
-                Text("Schedule 24h Work")
-            }
         }
 
         // --- Bottom Section (Message List and Input Bar) ---
@@ -159,38 +152,64 @@ fun ChatScreen() {
             TextField(
                 value = input,
                 onValueChange = { input = it },
-                placeholder = { Text("e.g. 'Navigate to Paris'") },
+                placeholder = { Text("e.g. 'Task meeting on 25-12-2025'") },
                 modifier = Modifier.weight(1f).height(56.dp),
                 shape = RoundedCornerShape(28.dp),
                 singleLine = true
             )
-
             Spacer(modifier = Modifier.width(8.dp))
-
             IconButton(onClick = {
-                val rawText = input.text.trim()
+                val rawText = input.text.trim().lowercase(Locale.getDefault())
                 if (rawText.isEmpty()) return@IconButton
-                val extracted = extractTimeFromText(rawText)
-                if (extracted != null) {
-                    val parsed = parseToHourMinute(extracted)
-                    if (parsed != null) {
-                        val (hour, minute) = parsed
-                        setAlarmCrossDevice(context, rawText, hour, minute)
-                        messageList.add(0, "✅ Alarm request sent for $extracted — \"$rawText\"")
-                    } else {
-                        messageList.add(0, "⚠️ Could not parse time \"$extracted\"")
-                    }
-                }
-                if (rawText.startsWith("navigate to", ignoreCase = true) || rawText.startsWith("open map", ignoreCase = true)) {
-                    val locationQuery = rawText.substringAfter("to").trim()
-                    if (locationQuery.isNotEmpty()) {
-                        openLocationInGoogleMaps(context, locationQuery)
-                        messageList.add(0, "🗺 Opening location: $locationQuery")
-                    } else {
-                        messageList.add(0, "⚠️ No location specified")
-                    }
-                }
 
+                when {
+                    // Logic for saving a scheduled task to the database
+                    rawText.startsWith("task") -> {
+                        val description = rawText.substringAfter("task").substringBefore(" on ").trim()
+                        val dateString = rawText.substringAfter(" on ").trim()
+                        try {
+                            val sdf = SimpleDateFormat("dd-MM-yyyy", Locale.getDefault())
+                            val date = sdf.parse(dateString)
+                            if (date != null && description.isNotEmpty()) {
+                                val task = ScheduledTask(description = description, executionTimeMillis = date.time)
+                                coroutineScope.launch {
+                                    AppDatabase.getDatabase(context).scheduledTaskDao().insert(task)
+                                }
+                                messageList.add(0, "✅ Task '$description' scheduled for $dateString")
+                            } else {
+                                messageList.add(0, "⚠️ Could not parse command. Use 'task [description] on [DD-MM-YYYY]'")
+                            }
+                        } catch (e: Exception) {
+                            messageList.add(0, "⚠️ Invalid command format.")
+                        }
+                    }
+                    // Logic for navigation
+                    rawText.startsWith("navigate to") || rawText.startsWith("open map") -> {
+                        val locationQuery = rawText.substringAfter("to").trim()
+                        if (locationQuery.isNotEmpty()) {
+                            openLocationInGoogleMaps(context, locationQuery)
+                            messageList.add(0, "🗺 Opening location: $locationQuery")
+                        } else {
+                            messageList.add(0, "⚠️ No location specified")
+                        }
+                    }
+                    // Fallback logic for alarms if time is mentioned
+                    else -> {
+                        val extracted = extractTimeFromText(rawText)
+                        if (extracted != null) {
+                            val parsed = parseToHourMinute(extracted)
+                            if (parsed != null) {
+                                val (hour, minute) = parsed
+                                setAlarmCrossDevice(context, rawText, hour, minute)
+                                messageList.add(0, "✅ Alarm request sent for $extracted")
+                            } else {
+                                messageList.add(0, "⚠️ Could not parse time \"$extracted\"")
+                            }
+                        } else {
+                            messageList.add(0, "❓ Command not recognized.")
+                        }
+                    }
+                }
                 input = TextFieldValue("")
             }) {
                 Icon(Icons.Default.Send, contentDescription = "Send")
@@ -199,29 +218,21 @@ fun ChatScreen() {
     }
 }
 
-/**
- * NEW FUNCTION
- * Schedules a one-time work request to be executed within the next 24 hours
- * using WorkManager.
- */
-private fun schedule24HourWork(context: Context) {
-    // Create some input data to pass to the worker, if needed
-    val workData = workDataOf("TASK_DATA" to "Sync daily report")
+// --- Helper Functions ---
 
-    // Build the work request
-    val workRequest = OneTimeWorkRequestBuilder<My24HourWorker>()
-        .setInitialDelay(24, TimeUnit.HOURS) // Set the work to run after 24 hours
-        .setInputData(workData)
+private fun schedulePeriodicTaskChecker(context: Context) {
+    val periodicWorkRequest = PeriodicWorkRequestBuilder<TaskExecutionWorker>(6, TimeUnit.HOURS)
         .build()
-
-    // Enqueue the work request
-    WorkManager.getInstance(context).enqueue(workRequest)
+    WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+        "PeriodicTaskChecker",
+        ExistingPeriodicWorkPolicy.KEEP,
+        periodicWorkRequest
+    )
+    Log.d("ChatScreen", "Periodic task checker has been scheduled.")
 }
 
-// --- Helper Functions from your provided code ---
-
 private fun extractTimeFromText(text: String): String? {
-    val regex = Regex("\\b\\d{1,2}:\\d{2}(?:\\s?[AaPp][Mm])?\\b")
+    val regex = Regex("\\b\\d{1,2}:\\d{2}(?:\\s?[ap]m)?\\b", RegexOption.IGNORE_CASE)
     return regex.find(text)?.value
 }
 
@@ -231,12 +242,10 @@ private fun parseToHourMinute(text: String): Pair<Int, Int>? {
         try {
             val sdf = SimpleDateFormat(p, Locale.getDefault())
             sdf.isLenient = false
-            val date = sdf.parse(text)
+            val date = sdf.parse(text.uppercase(Locale.getDefault()))
             if (date != null) {
                 val cal = Calendar.getInstance().apply { time = date }
-                val hour = cal.get(Calendar.HOUR_OF_DAY)
-                val minute = cal.get(Calendar.MINUTE)
-                return Pair(hour, minute)
+                return Pair(cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
             }
         } catch (_: ParseException) { /* try next */ }
     }
@@ -246,9 +255,7 @@ private fun parseToHourMinute(text: String): Pair<Int, Int>? {
 private fun parseHourMinute(text: String): Pair<Int?, Int?> {
     return try {
         val parts = text.split(":")
-        val h = parts[0].toInt()
-        val m = parts[1].toInt()
-        Pair(h, m)
+        Pair(parts[0].toInt(), parts[1].toInt())
     } catch (_: Exception) {
         Pair(null, null)
     }
@@ -270,15 +277,15 @@ private fun setAlarmCrossDevice(context: Context, label: String, hour: Int, minu
         val candidates = listOf("com.google.android.deskclock", "com.sec.android.app.clockpackage", "com.android.deskclock", "com.miui.clock")
         for (pkg in candidates) {
             try {
-                val launch = context.packageManager.getLaunchIntentForPackage(pkg)
-                if (launch != null) {
-                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(launch)
+                context.packageManager.getLaunchIntentForPackage(pkg)?.let {
+                    it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(it)
                     Toast.makeText(context, "Opening clock app — please set alarm ($label)", Toast.LENGTH_LONG).show()
                     return
                 }
-            } catch (_: Exception) { /* ignore and try next */ }
+            } catch (_: Exception) {}
         }
+        // Fallback using the old AlarmHelper to trigger the full-screen AlarmActivity
         AlarmHelper.scheduleInAppAlarm(context, label, hour, minute)
         Toast.makeText(context, "No compatible Clock app. Alarm scheduled inside app.", Toast.LENGTH_LONG).show()
     } catch (e: Exception) {
@@ -290,25 +297,19 @@ private fun setAlarmCrossDevice(context: Context, label: String, hour: Int, minu
 private fun openLocationInGoogleMaps(context: Context, locationName: String) {
     try {
         val gmmIntentUri = Uri.parse("geo:0,0?q=${Uri.encode(locationName)}")
-        val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).setPackage("com.google.android.apps.maps")
         if (mapIntent.resolveActivity(context.packageManager) != null) {
             context.startActivity(mapIntent)
-            return
+        } else {
+            val fallbackIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
+            if (fallbackIntent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(fallbackIntent)
+            } else {
+                Toast.makeText(context, "No map app found", Toast.LENGTH_LONG).show()
+            }
         }
-        val googleMapsIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
-            setPackage("com.google.android.apps.maps")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        if (googleMapsIntent.resolveActivity(context.packageManager) != null) {
-            context.startActivity(googleMapsIntent)
-            return
-        }
-        Toast.makeText(context, "No map app found", Toast.LENGTH_LONG).show()
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "Error opening map: ${e.message}", Toast.LENGTH_LONG).show()
     }
 }
-
