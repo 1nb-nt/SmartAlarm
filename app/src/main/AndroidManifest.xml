@@ -34,12 +34,18 @@
 
         <activity
             android:name=".AlarmActivity"
-            android:exported="false"
+            android:exported="true"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.AlarmChatApp" />
 
         <receiver
             android:name=".utils.AlarmReceiver"
             android:enabled="true"
             android:exported="true" />
+
+        <receiver
+            android:name=".AlarmHandlerReceiver"
+            android:enabled="true"
+            android:exported="false" />
     </application>
 </manifest>
