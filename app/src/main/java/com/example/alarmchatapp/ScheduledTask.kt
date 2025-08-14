@@ -8,5 +8,7 @@ data class ScheduledTask(
     @PrimaryKey(autoGenerate = true)
     val id: Int = 0,
     val description: String,
-    val executionTimeMillis: Long // The exact time the task is for
+    val executionTimeMillis: Long,
+    val isRecurring: Boolean = false,
+    val endDateMillis: Long? = null
 )

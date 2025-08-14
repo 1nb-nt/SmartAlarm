@@ -4,40 +4,62 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.example.alarmchatapp.utils.AlarmHelper
+import java.util.*
 import java.util.concurrent.TimeUnit
 
-class TaskExecutionWorker(appContext: Context, workerParams: WorkerParameters): CoroutineWorker(appContext, workerParams) {
+class TaskExecutionWorker(appContext: Context, workerParams: WorkerParameters) :
+    CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
-        Log.d("TaskExecutionWorker", "Worker starting: checking for upcoming tasks.")
-        val db = AppDatabase.getDatabase(applicationContext)
+        Log.d("TaskExecutionWorker", "Worker starting: checking for due tasks.")
+        try {
+            val db = AppDatabase.getDatabase(applicationContext)
+            val taskDao = db.scheduledTaskDao()
+            val dueTasks = taskDao.getTasksDue(System.currentTimeMillis())
 
-        // Define the time window: from now until 24 hours from now
-        val startTime = System.currentTimeMillis()
-        val endTime = startTime + TimeUnit.HOURS.toMillis(24)
+            if (dueTasks.isEmpty()) {
+                Log.d("TaskExecutionWorker", "No tasks are due.")
+                return Result.success()
+            }
 
-        // Fetch tasks due in the next 24 hours
-        val upcomingTasks = db.scheduledTaskDao().getTasksDue(startTime, endTime)
+            dueTasks.forEach { task ->
+                try {
+                    Log.d("TaskExecutionWorker", "Processing task: ${task.description}")
 
-        if (upcomingTasks.isEmpty()) {
-            Log.d("TaskExecutionWorker", "No tasks due in the next 24 hours.")
+                    if (task.isRecurring) {
+                        val nextExecutionTime = task.executionTimeMillis + TimeUnit.DAYS.toMillis(1)
+                        if (task.endDateMillis != null) {
+                            // Ranged Task Logic
+                            if (nextExecutionTime <= task.endDateMillis) {
+                                val updatedTask = task.copy(executionTimeMillis = nextExecutionTime)
+                                taskDao.update(updatedTask)
+                                // **FIX**: Call the correct function with the correct arguments
+                                AlarmHelper.scheduleInAppAlarm(applicationContext, task.description, nextExecutionTime)
+                                Log.d("TaskExecutionWorker", "Ranged task '${task.description}' rescheduled as in-app alarm.")
+                            } else {
+                                taskDao.deleteTask(task)
+                                Log.d("TaskExecutionWorker", "Ranged task '${task.description}' has completed.")
+                            }
+                        } else {
+                            // Infinite Daily Task Logic
+                            val updatedTask = task.copy(executionTimeMillis = nextExecutionTime)
+                            taskDao.update(updatedTask)
+                            Log.d("TaskExecutionWorker", "Infinite daily task '${task.description}' rescheduled.")
+                        }
+                    } else {
+                        // One-Time Task Logic
+                        taskDao.deleteTask(task)
+                        Log.d("TaskExecutionWorker", "One-time task '${task.description}' completed.")
+                    }
+                } catch (e: Exception) {
+                    Log.e("TaskExecutionWorker", "Failed to process task id: ${task.id}", e)
+                }
+            }
             return Result.success()
+        } catch (e: Exception) {
+            Log.e("TaskExecutionWorker", "Worker execution failed", e)
+            return Result.failure()
         }
-
-        // Process each upcoming task
-        upcomingTasks.forEach { task ->
-            Log.d("TaskExecutionWorker", "Executing task: ${task.description}")
-
-            // --- YOUR EXECUTION LOGIC HERE ---
-            // For example, show a notification about the task.
-            // For now, we will just log it.
-            // ---------------------------------
-
-            // After execution, delete the task so it doesn't run again
-            db.scheduledTaskDao().deleteTask(task)
-            Log.d("TaskExecutionWorker", "Task ${task.description} completed and deleted.")
-        }
-
-        return Result.success()
     }
 }
