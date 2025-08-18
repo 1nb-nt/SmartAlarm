@@ -76,5 +76,7 @@ object AlarmHelper {
             executionTimeMillis,
             pendingIntent
         )
+
+        Toast.makeText(context, "App alarm scheduled for your target date/time!", Toast.LENGTH_LONG).show()
     }
 }

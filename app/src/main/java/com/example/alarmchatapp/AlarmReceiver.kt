@@ -10,7 +10,7 @@ import androidx.core.app.NotificationCompat
 
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val message = intent.getStringExtra("ALARM_LABEL") ?: "Your alarm is ringing!"
+        val message = intent.getStringExtra("ALARM_LABEL") ?: "Alarm!"
 
         // --- Create a Notification to alert the user ---
         val channelId = "ALARM_CHANNEL"

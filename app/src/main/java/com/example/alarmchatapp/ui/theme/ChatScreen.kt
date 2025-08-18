@@ -33,13 +33,14 @@ import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.example.alarmchatapp.AppDatabase
 import com.example.alarmchatapp.R
 import com.example.alarmchatapp.ScheduledTask
 import com.example.alarmchatapp.TaskExecutionWorker
+import com.example.alarmchatapp.MyAlarmSetWorker
 import com.example.alarmchatapp.network.AlarmApiRequest
 import com.example.alarmchatapp.network.RetrofitClient
 import com.example.alarmchatapp.utils.AlarmHelper
@@ -57,7 +58,7 @@ fun ChatScreen() {
     val messageList = remember { mutableStateListOf<String>() }
     var input by remember { mutableStateOf(TextFieldValue("")) }
 
-    // --- Permission and Periodic Work Setup ---
+    // Permissions setup (same as before)
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) {}
@@ -65,7 +66,6 @@ fun ChatScreen() {
         locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
         schedulePeriodicTaskChecker(context)
     }
-
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         val notifyLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestPermission()
@@ -73,30 +73,40 @@ fun ChatScreen() {
         LaunchedEffect(Unit) { notifyLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
     }
 
+    // --- UI (unchanged as per your request) ---
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // --- Top Bar and Logo ---
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable {
-                Toast.makeText(context, "Settings clicked", Toast.LENGTH_SHORT).show()
-            }) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.clickable {
+                    Toast.makeText(context, "Settings clicked", Toast.LENGTH_SHORT).show()
+                }
+            ) {
                 Icon(Icons.Default.Settings, contentDescription = "Settings", modifier = Modifier.size(28.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("grox", style = MaterialTheme.typography.bodyMedium)
             }
         }
+
         val wowLogo: Painter = painterResource(id = R.drawable.wow_logo)
-        Box(modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp, bottom = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
             Image(painter = wowLogo, contentDescription = "WOW Logo", modifier = Modifier.size(140.dp))
         }
 
-        // --- Vertically Centered Interactive Section ---
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -110,12 +120,15 @@ fun ChatScreen() {
                 style = MaterialTheme.typography.headlineSmall,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
                 Button(onClick = {
-                    val raw = "Wake up"
+                    val rawLabel = "Wake up"
                     val (h, m) = parseHourMinute("07:00")
                     if (h != null && m != null) {
-                        AlarmHelper.setAlarmInClockApp(context, raw, h, m, isRecurring = false)
+                        AlarmHelper.setAlarmInClockApp(context, rawLabel, h, m, isRecurring = false)
                         messageList.add(0, "✅ Clock alarm scheduled for 07:00")
                     }
                 }) { Text("Wake me up") }
@@ -123,11 +136,11 @@ fun ChatScreen() {
                 Button(onClick = {
                     val cal = Calendar.getInstance().apply { add(Calendar.MINUTE, 1) }
                     val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-                    val t = sdf.format(cal.time)
-                    val (h, m) = parseHourMinute(t)
+                    val timeStr = sdf.format(cal.time)
+                    val (h, m) = parseHourMinute(timeStr)
                     if (h != null && m != null) {
                         AlarmHelper.setAlarmInClockApp(context, "Quick reminder", h, m, isRecurring = false)
-                        messageList.add(0, "✅ Clock reminder scheduled at $t")
+                        messageList.add(0, "✅ Clock reminder scheduled at $timeStr")
                     }
                 }) { Text("Remind me") }
 
@@ -138,7 +151,6 @@ fun ChatScreen() {
             }
         }
 
-        // --- Bottom Section (Message List and Input Bar) ---
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
@@ -147,13 +159,20 @@ fun ChatScreen() {
             reverseLayout = true
         ) {
             items(messageList) { msg ->
-                Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 4.dp, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    tonalElevation = 4.dp,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                ) {
                     Text(text = msg, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyLarge)
                 }
             }
         }
 
-        Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             TextField(
                 value = input,
                 onValueChange = { input = it },
@@ -168,86 +187,68 @@ fun ChatScreen() {
                 if (rawText.isEmpty()) return@IconButton
 
                 messageList.add(0, "👤: $rawText")
-                input = TextFieldValue("") // Clear input
+                input = TextFieldValue("")
 
                 coroutineScope.launch {
-                    val command = rawText.lowercase(Locale.getDefault())
-                    when {
-                        // Logic for saving a scheduled task to the database
-                        command.startsWith("task") -> {
-                            val description = command.substringAfter("task").substringBefore(" on ").trim()
-                            val dateString = command.substringAfter(" on ").trim()
-                            try {
-                                val sdf = SimpleDateFormat("dd-MM-yyyy", Locale.getDefault())
-                                val date = sdf.parse(dateString)
-                                if (date != null && description.isNotEmpty()) {
-                                    val task = ScheduledTask(description = description, executionTimeMillis = date.time)
-                                    AppDatabase.getDatabase(context).scheduledTaskDao().insert(task)
-                                    showTaskScheduledNotification(context, "Task Saved", "'$description' is saved for $dateString")
-                                } else {
-                                    messageList.add(0, "⚠️ Could not parse command. Use 'task [description] on [dd-MM-yyyy]'")
-                                }
-                            } catch (e: Exception) {
-                                messageList.add(0, "⚠️ Invalid date format. Use 'dd-MM-yyyy'.")
-                            }
+                    try {
+                        // --- 1. Send input to API ---
+                        messageList.add(0, "🤖 Calling API...")
+                        val request = AlarmApiRequest(query = rawText)
+                        val response = RetrofitClient.instance.getAlarmDetails(request)
+                        // At this point, you have a parsed JSON AlarmApiResponse from your server:
+                        val alarmTitle = response.title
+                        val eventDateString = response.datetime
+
+                        // --- 2. Parse event datetime (as per your app's backend format) ---
+                        val eventDate = parseApiOrCustomDate(eventDateString, rawText)
+                        if (eventDate == null) {
+                            messageList.add(0, "⚠️ Could not parse event date/time. Please use 'dd-MM-yyyy at hh:mm am/pm'.")
+                            return@launch
                         }
+                        val eventMillis = eventDate.time
+                        val triggerMillis = eventMillis - TimeUnit.HOURS.toMillis(24)
+                        val nowMillis = System.currentTimeMillis()
 
-                        // Logic for in-app navigation
-                        command.startsWith("navigate to") || command.startsWith("open map") -> {
-                            val locationQuery = command.substringAfter("to").trim()
-                            if (locationQuery.isNotEmpty()) {
-                                displayLocationInAppMap(context, locationQuery)
-                                messageList.add(0, "🗺 Displaying location in-app: $locationQuery")
-                            } else {
-                                messageList.add(0, "⚠️ No location specified")
-                            }
-                        }
-
-                        // Fallback logic for alarms using the API
-                        else -> {
-                            try {
-                                messageList.add(0, "🤖 Calling API...")
-                                val request = AlarmApiRequest(query = rawText)
-                                val response = RetrofitClient.instance.getAlarmDetails(request)
-
-                                // --- START OF CORRECTED CODE BLOCK ---
-                                val date = parseIsoDateTime(response.datetime) // Use the new robust function
-
-                                if (date != null) {
-                                    // The date was parsed successfully!
-                                    val cal = Calendar.getInstance().apply { time = date }
-                                    val task = ScheduledTask(
-                                        description = response.title,
-                                        executionTimeMillis = date.time,
-                                        isRecurring = (response.recurrence != "once")
+                        // --- 3. Schedule with WorkManager or alarm directly ---
+                        if (triggerMillis > nowMillis) {
+                            // Set alarm via WorkManager 24hrs before event
+                            val workRequest = OneTimeWorkRequestBuilder<MyAlarmSetWorker>()
+                                .setInitialDelay(triggerMillis - nowMillis, TimeUnit.MILLISECONDS)
+                                .setInputData(
+                                    workDataOf(
+                                        "ALARM_TITLE" to alarmTitle,
+                                        "EVENT_TIME" to eventMillis
                                     )
-                                    AppDatabase.getDatabase(context).scheduledTaskDao().insert(task)
-
-                                    val shouldBeRecurring = (response.recurrence != "once")
-                                    AlarmHelper.setAlarmInClockApp(
-                                        context,
-                                        response.title,
-                                        cal.get(Calendar.HOUR_OF_DAY),
-                                        cal.get(Calendar.MINUTE),
-                                        isRecurring = shouldBeRecurring
-                                    )
-
-                                    val recurringText = if (shouldBeRecurring) " (daily)" else ""
-                                    val confirmationMessage = "'${response.title}' scheduled in Clock App$recurringText."
-                                    messageList.add(0, "✅ $confirmationMessage")
-                                    showTaskScheduledNotification(context, "Alarm Scheduled", confirmationMessage)
-                                } else {
-                                    // The date could not be parsed, show a friendly error instead of crashing
-                                    Log.e("ChatScreen", "Could not parse date from API: ${response.datetime}")
-                                    messageList.add(0, "⚠️ Error: Could not understand the date from the API.")
-                                }
-                                // --- END OF CORRECTED CODE BLOCK ---
-
-                            } catch (e: Exception) {
-                                Log.e("ChatScreen", "API call or scheduling failed", e)
-                                messageList.add(0, "⚠️ Error: Request failed. Could not reach server.")
-                            }
+                                )
+                                .build()
+                            WorkManager.getInstance(context).enqueue(workRequest)
+                            messageList.add(0, "✅ Alarm will be set in Clock app 24 hours before your event.")
+                            showTaskScheduledNotification(
+                                context,
+                                "Alarm Scheduled",
+                                "Alarm '$alarmTitle' will be set 24 hours before the event on ${formatDateTime(eventDate)}"
+                            )
+                        } else {
+                            // Event is soon: set alarm in Clock app immediately
+                            val cal = Calendar.getInstance().apply { timeInMillis = eventMillis }
+                            AlarmHelper.setAlarmInClockApp(
+                                context,
+                                alarmTitle,
+                                cal.get(Calendar.HOUR_OF_DAY),
+                                cal.get(Calendar.MINUTE),
+                                isRecurring = false
+                            )
+                            messageList.add(0, "✅ Event is soon or past; alarm set in your Clock app.")
+                            showTaskScheduledNotification(
+                                context,
+                                "Alarm Scheduled",
+                                "Alarm '$alarmTitle' set immediately for ${formatDateTime(eventDate)}"
+                            )
                         }
+
+                    } catch (e: Exception) {
+                        Log.e("ChatScreen", "API or alarm scheduling failed", e)
+                        messageList.add(0, "⚠️ Error: Could not reach server or process request.")
                     }
                 }
             }) {
@@ -257,40 +258,45 @@ fun ChatScreen() {
     }
 }
 
-// --- Helper Functions ---
 
-// **NEW**: A more robust function to parse various ISO date/time formats
-private fun parseIsoDateTime(dateTimeStr: String): Date? {
-    val formats = listOf(
-        "yyyy-MM-dd'T'HH:mm:ssXXX",  // Format with timezone offset (e.g., +05:30)
-        "yyyy-MM-dd'T'HH:mm:ss'Z'",   // Format with 'Z' for UTC
-        "yyyy-MM-dd'T'HH:mm:ss"      // Format without timezone
-    )
-    for (format in formats) {
-        try {
-            // Using Locale.US is safer for machine-generated timestamps
-            return SimpleDateFormat(format, Locale.getDefault()).parse(dateTimeStr)
-        } catch (e: Exception) {
-            // Ignore and try the next format
+// --- Helpers ---
+
+// Tries both API datetime string, and fallback to trying the custom pattern in user's message
+private fun parseApiOrCustomDate(apiDate: String, userInput: String): Date? {
+    if (apiDate.isNotBlank()) {
+        val isoFormats = listOf(
+            "yyyy-MM-dd'T'HH:mm:ssXXX", "yyyy-MM-dd'T'HH:mm:ss'Z'", "yyyy-MM-dd'T'HH:mm:ss"
+        )
+        for (f in isoFormats) {
+            try { return SimpleDateFormat(f, Locale.getDefault()).parse(apiDate) } catch(_: Exception) { }
         }
     }
-    Log.w("ChatScreen", "All parsing attempts failed for date: $dateTimeStr")
-    return null // Return null if all formats fail
+    // Try custom format found in userInput
+    try {
+        val datePart = Regex("""\b(\d{2}-\d{2}-\d{4})\b""").find(userInput)?.value
+        val timePart = Regex("""\b(\d{1,2}:\d{2}\s*[apAP][mM])\b""").find(userInput)?.value
+        if (datePart != null && timePart != null) {
+            val sdf = SimpleDateFormat("dd-MM-yyyy hh:mm aa", Locale.getDefault())
+            return sdf.parse("$datePart $timePart")
+        }
+    } catch(_: Exception) {}
+    return null
 }
+
+private fun formatDateTime(date: Date): String =
+    SimpleDateFormat("dd-MM-yyyy hh:mm a", Locale.getDefault()).format(date)
 
 private fun showTaskScheduledNotification(context: Context, title: String, message: String) {
     val channelId = "TASK_SCHEDULED_CHANNEL"
     val notificationId = System.currentTimeMillis().toInt()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        val name = "Task Notifications"
-        val descriptionText = "Notifications for successfully scheduled tasks"
-        val importance = NotificationManager.IMPORTANCE_DEFAULT
-        val channel = NotificationChannel(channelId, name, importance).apply {
-            description = descriptionText
+        val channel = NotificationChannel(
+            channelId, "Task Notifications", NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "Notifications for successfully scheduled tasks"
         }
-        val notificationManager: NotificationManager =
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.createNotificationChannel(channel)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
     }
     val builder = NotificationCompat.Builder(context, channelId)
         .setSmallIcon(android.R.drawable.ic_popup_reminder)
@@ -298,7 +304,6 @@ private fun showTaskScheduledNotification(context: Context, title: String, messa
         .setContentText(message)
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .setAutoCancel(true)
-
     if (ActivityCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
         NotificationManagerCompat.from(context).notify(notificationId, builder.build())
     } else {
@@ -307,26 +312,25 @@ private fun showTaskScheduledNotification(context: Context, title: String, messa
 }
 
 private fun schedulePeriodicTaskChecker(context: Context) {
-    val periodicWorkRequest = PeriodicWorkRequestBuilder<TaskExecutionWorker>(15, TimeUnit.MINUTES).build()
+    val periodicWorkRequest = androidx.work.PeriodicWorkRequestBuilder<TaskExecutionWorker>(15, TimeUnit.MINUTES).build()
     WorkManager.getInstance(context).enqueueUniquePeriodicWork(
         "PeriodicTaskChecker",
-        ExistingPeriodicWorkPolicy.KEEP,
+        androidx.work.ExistingPeriodicWorkPolicy.KEEP,
         periodicWorkRequest
     )
-    Log.d("ChatScreen", "Periodic task checker has been scheduled.")
+    Log.d("ChatScreen", "Periodic task checker scheduled.")
 }
 
 private fun parseHourMinute(text: String): Pair<Int?, Int?> {
     return try {
         val parts = text.split(":")
-        Pair(parts[0].toInt(), parts[1].toInt())
+        Pair(parts[0].toIntOrNull(), parts[1].toIntOrNull())
     } catch (_: Exception) {
         Pair(null, null)
     }
 }
 
 private fun displayLocationInAppMap(context: Context, locationName: String) {
-    // This is a placeholder for your actual map implementation
     Toast.makeText(context, "Displaying '$locationName' on in-app map (Not implemented).", Toast.LENGTH_LONG).show()
     Log.d("ChatScreen", "Attempted to display '$locationName' on in-app map.")
 }
