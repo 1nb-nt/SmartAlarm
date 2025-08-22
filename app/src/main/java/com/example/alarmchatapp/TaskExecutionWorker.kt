@@ -1,9 +1,10 @@
-package com.example.alarmchatapp
+package com.example.alarchatmapp
 
 import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.example.alarmchatapp.AppDatabase
 import com.example.alarmchatapp.utils.AlarmHelper
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -12,11 +13,13 @@ class TaskExecutionWorker(appContext: Context, workerParams: WorkerParameters) :
     CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
-        Log.d("TaskExecutionWorker", "Worker starting: checking for due tasks.")
-        try {
+        Log.d("TaskExecutionWorker", "Worker starting: checking due tasks.")
+
+        return try {
             val db = AppDatabase.getDatabase(applicationContext)
             val taskDao = db.scheduledTaskDao()
-            val dueTasks = taskDao.getTasksDue(System.currentTimeMillis())
+            val now = System.currentTimeMillis()
+            val dueTasks = taskDao.getTasksDue(now)
 
             if (dueTasks.isEmpty()) {
                 Log.d("TaskExecutionWorker", "No tasks are due.")
@@ -30,36 +33,36 @@ class TaskExecutionWorker(appContext: Context, workerParams: WorkerParameters) :
                     if (task.isRecurring) {
                         val nextExecutionTime = task.executionTimeMillis + TimeUnit.DAYS.toMillis(1)
                         if (task.endDateMillis != null) {
-                            // Ranged Task Logic
+                            // Ranged recurring task with end date
                             if (nextExecutionTime <= task.endDateMillis) {
                                 val updatedTask = task.copy(executionTimeMillis = nextExecutionTime)
                                 taskDao.update(updatedTask)
-                                // **FIX**: Call the correct function with the correct arguments
-                                AlarmHelper.scheduleInAppAlarm(applicationContext, task.description, nextExecutionTime)
-                                Log.d("TaskExecutionWorker", "Ranged task '${task.description}' rescheduled as in-app alarm.")
+                                AlarmHelper.scheduleInAppAlarm(applicationContext, task.description, nextExecutionTime, task.id)
+                                Log.d("TaskExecutionWorker", "Ranged task '${task.description}' rescheduled.")
                             } else {
                                 taskDao.deleteTask(task)
-                                Log.d("TaskExecutionWorker", "Ranged task '${task.description}' has completed.")
+                                Log.d("TaskExecutionWorker", "Ranged task '${task.description}' completed and deleted.")
                             }
                         } else {
-                            // Infinite Daily Task Logic
+                            // Infinite recurring task
                             val updatedTask = task.copy(executionTimeMillis = nextExecutionTime)
                             taskDao.update(updatedTask)
-                            Log.d("TaskExecutionWorker", "Infinite daily task '${task.description}' rescheduled.")
+                            AlarmHelper.scheduleInAppAlarm(applicationContext, task.description, nextExecutionTime, task.id)
+                            Log.d("TaskExecutionWorker", "Infinite recurring task '${task.description}' rescheduled.")
                         }
                     } else {
-                        // One-Time Task Logic
+                        // One-time task
                         taskDao.deleteTask(task)
-                        Log.d("TaskExecutionWorker", "One-time task '${task.description}' completed.")
+                        Log.d("TaskExecutionWorker", "One-time task '${task.description}' deleted after execution.")
                     }
-                } catch (e: Exception) {
-                    Log.e("TaskExecutionWorker", "Failed to process task id: ${task.id}", e)
+                } catch (ex: Exception) {
+                    Log.e("TaskExecutionWorker", "Failed processing task id ${task.id}", ex)
                 }
             }
-            return Result.success()
-        } catch (e: Exception) {
-            Log.e("TaskExecutionWorker", "Worker execution failed", e)
-            return Result.failure()
+            Result.success()
+        } catch (ex: Exception) {
+            Log.e("TaskExecutionWorker", "Worker failed", ex)
+            Result.failure()
         }
     }
 }

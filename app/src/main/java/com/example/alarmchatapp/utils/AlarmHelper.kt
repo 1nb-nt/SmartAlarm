@@ -8,34 +8,29 @@ import android.os.Build
 import android.provider.AlarmClock
 import android.provider.Settings
 import android.widget.Toast
-import androidx.core.content.ContextCompat
 import com.example.alarmchatapp.AlarmReceiver
 import java.util.*
 
 object AlarmHelper {
 
-    // Use this for INFINITE daily alarms in the clock app
-    fun setAlarmInClockApp(context: Context, label: String, hour: Int, minute: Int, isRecurring: Boolean = false) {
-        // This function does not require the new permission, as it uses a standard intent.
-        // Its logic can remain the same.
+    // Set alarm in the device's default Clock app with optional recurrence days
+    fun setTimeInClockApp(context: Context, label: String, hour: Int, minute: Int, repeatDays: List<Int>? = null) {
         try {
             val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
                 putExtra(AlarmClock.EXTRA_HOUR, hour)
                 putExtra(AlarmClock.EXTRA_MINUTES, minute)
                 putExtra(AlarmClock.EXTRA_MESSAGE, label)
                 putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-                if (isRecurring) {
-                    val days = arrayListOf(
-                        Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY,
-                        Calendar.FRIDAY, Calendar.SATURDAY, Calendar.SUNDAY
-                    )
-                    putExtra(AlarmClock.EXTRA_DAYS, days)
+                repeatDays?.let {
+                    if (it.isNotEmpty()) {
+                        putExtra(AlarmClock.EXTRA_DAYS, ArrayList(it))
+                    }
                 }
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             if (intent.resolveActivity(context.packageManager) != null) {
                 context.startActivity(intent)
-                val recurringText = if (isRecurring) " (daily)" else ""
+                val recurringText = if (repeatDays != null && repeatDays.isNotEmpty()) " (recurring days)" else ""
                 Toast.makeText(context, "Alarm set in clock app: $label at $hour:$minute$recurringText", Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
@@ -43,40 +38,42 @@ object AlarmHelper {
         }
     }
 
-    // **MODIFIED**: Use this for PRECISE one-time or ranged alarms
-    fun scheduleInAppAlarm(context: Context, label: String, executionTimeMillis: Long) {
+    // Schedule exact alarm in the app using AlarmManager with unique alarmId.
+    fun scheduleInAppAlarm(context: Context, label: String, executionTime: Long, alarmId: Int) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-
-        // **FIX**: Check for the exact alarm permission before setting the alarm
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (!alarmManager.canScheduleExactAlarms()) {
-                // Permission is not granted, guide the user to the settings screen
-                Toast.makeText(context, "Permission needed to set precise alarms.", Toast.LENGTH_LONG).show()
-                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).also {
-                    context.startActivity(it)
-                }
-                return // Stop execution until permission is granted
+                Toast.makeText(context, "Permission needed to schedule exact alarms.", Toast.LENGTH_LONG).show()
+                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+                return
             }
         }
-
         val intent = Intent(context, AlarmReceiver::class.java).apply {
             putExtra("ALARM_LABEL", label)
+            putExtra("ALARM_ID", alarmId)
         }
-
         val pendingIntent = PendingIntent.getBroadcast(
             context,
-            executionTimeMillis.toInt(), // Unique ID for each alarm
+            alarmId,
             intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, executionTime, pendingIntent)
+        Toast.makeText(context, "Alarm scheduled: $label at ${Date(executionTime)}", Toast.LENGTH_LONG).show()
+    }
 
-        // This line will now only be called if permission is granted
-        alarmManager.setExactAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            executionTimeMillis,
-            pendingIntent
+    // Cancel an existing scheduled alarm by its id
+    fun cancelScheduledAlarm(context: Context, alarmId: Int) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(context, AlarmReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            alarmId,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
-        Toast.makeText(context, "App alarm scheduled for your target date/time!", Toast.LENGTH_LONG).show()
+        alarmManager.cancel(pendingIntent)
     }
 }

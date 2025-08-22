@@ -15,6 +15,7 @@ class MyAlarmSetWorker(
     override fun doWork(): Result {
         val alarmTitle = inputData.getString("ALARM_TITLE") ?: "Scheduled Alarm"
         val eventTimeMillis = inputData.getLong("EVENT_TIME", -1L)
+        val alarmId = inputData.getInt("ALARM_ID", 0)
 
         if (eventTimeMillis == -1L) {
             Log.e("MyAlarmSetWorker", "No event time provided for alarm.")
@@ -26,19 +27,19 @@ class MyAlarmSetWorker(
         val minute = cal.get(Calendar.MINUTE)
 
         return try {
-            // 1. Set alarm in the real Clock app
-            AlarmHelper.setAlarmInClockApp(
+            // Set alarm in default Clock app
+            AlarmHelper.setTimeInClockApp(
                 applicationContext,
                 alarmTitle,
                 hour,
                 minute,
-                isRecurring = false
+                null
             )
-            Log.d("MyAlarmSetWorker", "Alarm assigned in clock app for '$alarmTitle' at $hour:$minute on ${Date(eventTimeMillis)}.")
+            Log.d("MyAlarmSetWorker", "Alarm set in clock app at $hour:$minute.")
 
-            // 2. Also schedule in-app alarm as fallback or for custom notification handling
-            AlarmHelper.scheduleInAppAlarm(applicationContext, alarmTitle, eventTimeMillis)
-            Log.d("MyAlarmSetWorker", "In-app alarm scheduled for '$alarmTitle' at ${Date(eventTimeMillis)}.")
+            // Also schedule exact alarm in the app as fallback
+            AlarmHelper.scheduleInAppAlarm(applicationContext, alarmTitle, eventTimeMillis, alarmId)
+            Log.d("MyAlarmSetWorker", "App alarm scheduled at ${Date(eventTimeMillis)}.")
 
             Result.success()
         } catch (e: Exception) {

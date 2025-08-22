@@ -22,6 +22,7 @@ data class AlarmApiResponse(
     val distance: String?, // The '?' makes it nullable to handle `null` values
     val timezone: String,
     val recurrence: String,
+    val daysOfWeek: List<Int>?,
     val notification: NotificationInfo // A nested data class for the "notification" object
 )
 
