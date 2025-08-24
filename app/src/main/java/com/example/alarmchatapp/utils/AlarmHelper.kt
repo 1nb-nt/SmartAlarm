@@ -5,7 +5,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.provider.AlarmClock
 import android.provider.Settings
 import android.widget.Toast
 import com.example.alarmchatapp.AlarmReceiver
@@ -14,27 +13,16 @@ import java.util.*
 object AlarmHelper {
 
     // Set alarm in the device's default Clock app with optional recurrence days
-    fun setTimeInClockApp(context: Context, label: String, hour: Int, minute: Int, repeatDays: List<Int>? = null) {
-        try {
-            val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
-                putExtra(AlarmClock.EXTRA_HOUR, hour)
-                putExtra(AlarmClock.EXTRA_MINUTES, minute)
-                putExtra(AlarmClock.EXTRA_MESSAGE, label)
-                putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-                repeatDays?.let {
-                    if (it.isNotEmpty()) {
-                        putExtra(AlarmClock.EXTRA_DAYS, ArrayList(it))
-                    }
-                }
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            if (intent.resolveActivity(context.packageManager) != null) {
-                context.startActivity(intent)
-                val recurringText = if (repeatDays != null && repeatDays.isNotEmpty()) " (recurring days)" else ""
-                Toast.makeText(context, "Alarm set in clock app: $label at $hour:$minute$recurringText", Toast.LENGTH_LONG).show()
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
+    fun scheduleWeeklyAlarms(
+        context: Context,
+        label: String,
+        hour: Int,
+        minute: Int,
+        selectedDays: List<Int>? // Sunday=0 ... Saturday=6
+    ) {
+        val times = getNextAlarmTimes(hour, minute, selectedDays)
+        for ((idx, time) in times.withIndex()) {
+            scheduleInAppAlarm(context, "${label} (${getDayName(idx)})", time, 1000 + idx)
         }
     }
 
@@ -76,4 +64,37 @@ object AlarmHelper {
         )
         alarmManager.cancel(pendingIntent)
     }
+}
+
+fun getNextAlarmTimes(hour: Int, minute: Int, selectedDays: List<Int>?): List<Long> {
+    val times = mutableListOf<Long>()
+    if (selectedDays.isNullOrEmpty()) return times
+    for (dayIndex in selectedDays) {  // Iterate over selected day values
+        val c = Calendar.getInstance()
+        val todayDayOfWeek = c.get(Calendar.DAY_OF_WEEK) // SUNDAY=1 ... SATURDAY=7
+        val dayOfWeek = ((dayIndex + 1) % 7) + 1 // Map 0-6 -> 1-7
+
+        var daysUntil = dayOfWeek - todayDayOfWeek
+        // If today/alarm time has passed, schedule for next week
+        if (daysUntil < 0 || (daysUntil == 0 && (
+                    c.get(Calendar.HOUR_OF_DAY) > hour || (
+                            c.get(Calendar.HOUR_OF_DAY) == hour && c.get(Calendar.MINUTE) >= minute
+                            )
+                    ))) {
+            daysUntil += 7
+        }
+        c.add(Calendar.DAY_OF_YEAR, daysUntil)
+        c.set(Calendar.HOUR_OF_DAY, hour)
+        c.set(Calendar.MINUTE, minute)
+        c.set(Calendar.SECOND, 0)
+        c.set(Calendar.MILLISECOND, 0)
+        times.add(c.timeInMillis)
+    }
+    return times
+}
+
+
+// Helper to get weekday name from index
+fun getDayName(index: Int): String {
+    return listOf("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")[index]
 }

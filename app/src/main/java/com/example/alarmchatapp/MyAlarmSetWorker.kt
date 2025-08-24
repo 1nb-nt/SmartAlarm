@@ -28,7 +28,7 @@ class MyAlarmSetWorker(
 
         return try {
             // Set alarm in default Clock app
-            AlarmHelper.setTimeInClockApp(
+            AlarmHelper.scheduleWeeklyAlarms(
                 applicationContext,
                 alarmTitle,
                 hour,

@@ -28,13 +28,10 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.work.workDataOf
 import com.example.alarmchatapp.AppDatabase
 import com.example.alarmchatapp.Alarm
-import com.example.alarmchatapp.MyAlarmSetWorker
 import com.example.alarmchatapp.network.AlarmApiRequest
 import com.example.alarmchatapp.network.RetrofitClient
 import com.example.alarmchatapp.utils.AlarmHelper
@@ -204,11 +201,12 @@ fun InputSection(
 
                     val db = AppDatabase.getDatabase(context)
                     val alarmDao = db.alarmDao()
+                    Log.d("","Days of week: $response.daysOfWeek")
                     val isRecurring = response.daysOfWeek?.isNotEmpty() ?: false
 
                     if (isRecurring) {
                         // Schedule recurring alarm in Clock app
-                        AlarmHelper.setTimeInClockApp(
+                        AlarmHelper.scheduleWeeklyAlarms(
                             context,
                             alarmTitle,
                             cal.get(Calendar.HOUR_OF_DAY),
@@ -259,12 +257,12 @@ fun parseApiDateTime(apiDate: String, input: String): Date? {
 
 fun schedulePeriodicChecker(context: Context) {
     val workRequest = PeriodicWorkRequestBuilder<com.example.alarchatmapp.TaskExecutionWorker>(
-        15, TimeUnit.MINUTES
+        24, TimeUnit.HOURS
     ).build()
     WorkManager.getInstance(context).enqueueUniquePeriodicWork(
         "PeriodicChecker",
         ExistingPeriodicWorkPolicy.KEEP,
         workRequest
     )
-    Log.d("ChatScreen", "Scheduled periodic checker for every 15 minutes")
+    Log.d("ChatScreen", "Scheduled periodic checker for every 24 hours")
 }
