@@ -8,6 +8,6 @@ interface ApiService {
      * Sends the user's text to the API and expects an AlarmApiResponse back.
      */
     // **THE FIX**: This MUST match the @app.route in your Python script.
-    @POST("process_alarm")
+    @POST("generate")
     suspend fun getAlarmDetails(@Body request: AlarmApiRequest): AlarmApiResponse
 }

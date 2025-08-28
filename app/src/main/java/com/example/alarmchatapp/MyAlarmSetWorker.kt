@@ -33,7 +33,8 @@ class MyAlarmSetWorker(
                 alarmTitle,
                 hour,
                 minute,
-                null
+                null,
+                baseAlarmId = alarmId
             )
             Log.d("MyAlarmSetWorker", "Alarm set in clock app at $hour:$minute.")
 
