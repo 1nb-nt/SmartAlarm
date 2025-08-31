@@ -67,7 +67,7 @@ object AlarmHelper {
         }
         val intent = Intent(context, AlarmReceiver::class.java).apply {
             putExtra("ALARM_LABEL", label)
-            putExtra("ALARM_ID", alarmId)
+            putExtra("ALARM_ID", alarmId)//todo:if its recurring observe the db and change the next alarm to assign it for next week.
         }
         val pendingIntent = PendingIntent.getBroadcast(
             context,

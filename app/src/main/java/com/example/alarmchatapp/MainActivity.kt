@@ -6,7 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import com.example.alarmchatapp.ui.theme.AppContent
+import com.example.alarmchatapp.ui.AppContent
 import com.example.alarmchatapp.ui.theme.AlarmListScreen
 
 class MainActivity: ComponentActivity() {

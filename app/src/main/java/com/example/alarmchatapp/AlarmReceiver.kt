@@ -78,6 +78,7 @@ class AlarmReceiver : BroadcastReceiver() {
                         timeInMillis = alarm.triggerTimeMillis
                         add(Calendar.WEEK_OF_YEAR, 1) // For weekly recurrence; change to DAY_OF_YEAR for daily
                     }
+                    //todo:if its recurring observe the db and change the next alarm to assign it for next week.
                     val nextTriggerTime = calendar.timeInMillis
                     Log.d("AlarmReceiver", "Rescheduling recurring alarm for next week at $nextTriggerTime")
 
