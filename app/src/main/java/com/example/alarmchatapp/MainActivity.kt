@@ -7,25 +7,24 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import com.example.alarmchatapp.ui.AppContent
-import com.example.alarmchatapp.ui.theme.AlarmListScreen
 
-class MainActivity: ComponentActivity() {
+class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val notificationManager = getSystemService(NotificationManager::class.java)
             val channel = NotificationChannel(
                 "alarm_channel",
                 "Alarm Notifications",
                 NotificationManager.IMPORTANCE_HIGH
             )
-            channel.description = "Channel for alarm notifications"
+            val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
         }
 
         setContent {
-            AppContent()  // Compose entrypoint shows ChatScreen or AlarmListScreen based on state
+            AppContent()
         }
     }
 }

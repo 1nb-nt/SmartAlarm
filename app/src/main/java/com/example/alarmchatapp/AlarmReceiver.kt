@@ -4,38 +4,25 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import android.app.NotificationManager
 import android.app.NotificationChannel
 import androidx.core.app.NotificationCompat
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import com.example.alarmchatapp.AppDatabase
-import com.example.alarmchatapp.Alarm
-import com.example.alarmchatapp.AlarmActivity
-import android.util.Log
 import com.example.alarmchatapp.utils.AlarmHelper
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import java.util.*
 
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val message = intent.getStringExtra("ALARM_LABEL") ?: "Alarm!"
         val alarmId = intent.getIntExtra("ALARM_ID", -1)
-        Log.d("AlarmReceiver", "Alarm received. ID: $alarmId, Message: $message")
+        val message = intent.getStringExtra("ALARM_LABEL") ?: "Alarm"
 
+        Log.d("AlarmReceiver", "Alarm received: ID=$alarmId, Msg=$message")
+
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channelId = "alarm_channel"
-        val notificationManager =
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "Alarm Notifications",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Channel for alarm notifications"
-            }
+            val channel = NotificationChannel(channelId, "Alarm Notifications", NotificationManager.IMPORTANCE_HIGH)
             notificationManager.createNotificationChannel(channel)
         }
 
@@ -48,52 +35,31 @@ class AlarmReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
             .build()
 
-        notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+        notificationManager.notify(alarmId, notification)
 
-        // Launch Alarm UI
         val alarmIntent = Intent(context, AlarmActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
             putExtra("ALARM_MESSAGE", message)
         }
         context.startActivity(alarmIntent)
 
-        if (alarmId == -1) {
-            Log.e("AlarmReceiver", "Invalid alarm ID")
-            return
-        }
+        if (alarmId == -1) return
 
         CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val db = AppDatabase.getDatabase(context)
-                val alarmDao = db.alarmDao()
-                val alarm = alarmDao.getById(alarmId)
-
-                if (alarm == null) {
-                    Log.e("AlarmReceiver", "No alarm found in DB with ID $alarmId")
-                    return@launch
+            val db = AppDatabase.getDatabase(context)
+            val alarmDao = db.alarmDao()
+            val alarm = alarmDao.getById(alarmId) ?: return@launch
+            if (alarm.isRecurring) {
+                val cal = Calendar.getInstance()
+                cal.timeInMillis = alarm.triggerTimeMillis
+                cal.add(Calendar.WEEK_OF_YEAR, 1)
+                val nextTrigger = cal.timeInMillis
+                alarmDao.update(alarm.copy(triggerTimeMillis = nextTrigger))
+                withContext(Dispatchers.Main) {
+                    AlarmHelper.scheduleSingleAlarm(context, alarm.message, nextTrigger, alarm.id)
                 }
-
-                if (alarm.isRecurring) {
-                    val calendar = Calendar.getInstance().apply {
-                        timeInMillis = alarm.triggerTimeMillis
-                        add(Calendar.WEEK_OF_YEAR, 1) // For weekly recurrence; change to DAY_OF_YEAR for daily
-                    }
-                    //todo:if its recurring observe the db and change the next alarm to assign it for next week.
-                    val nextTriggerTime = calendar.timeInMillis
-                    Log.d("AlarmReceiver", "Rescheduling recurring alarm for next week at $nextTriggerTime")
-
-                    val updatedAlarm = alarm.copy(triggerTimeMillis = nextTriggerTime)
-                    alarmDao.update(updatedAlarm)
-
-                    withContext(Dispatchers.Main) {
-                        AlarmHelper.scheduleInAppAlarm(context, alarm.message, nextTriggerTime, alarm.id)
-                    }
-                } else {
-                    Log.d("AlarmReceiver", "Deleting one-time alarm ID: $alarmId")
-                    alarmDao.delete(alarm)
-                }
-            } catch (e: Exception) {
-                Log.e("AlarmReceiver", "Error handling alarm reschedule: ${e.localizedMessage}", e)
+            } else {
+                alarmDao.delete(alarm)
             }
         }
     }

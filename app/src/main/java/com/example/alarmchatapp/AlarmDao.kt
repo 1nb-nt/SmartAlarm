@@ -10,6 +10,10 @@ interface AlarmDao {
     @Query("SELECT * FROM alarms ORDER BY triggerTimeMillis ASC")
     suspend fun getAll(): List<Alarm>
 
+    @Query("SELECT * FROM alarms WHERE triggerTimeMillis <= :now ORDER BY triggerTimeMillis")
+    suspend fun getDueAlarms(now: Long): List<Alarm>
+
+
     @Query("SELECT * FROM alarms WHERE id = :id")
     suspend fun getById(id: Int): Alarm?
 

@@ -1,68 +1,52 @@
-package com.example.alarchatmapp
+package com.example.alarmchatapp
 
 import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.example.alarmchatapp.AppDatabase
 import com.example.alarmchatapp.utils.AlarmHelper
-import java.util.*
-import java.util.concurrent.TimeUnit
 
-class TaskExecutionWorker(appContext: Context, workerParams: WorkerParameters) :
-    CoroutineWorker(appContext, workerParams) {
+class TaskExecutionWorker(
+    context: Context,
+    params: WorkerParameters
+) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        Log.d("TaskExecutionWorker", "Worker starting: checking due tasks.")
-
-        return try {
+        Log.d("TaskExecutionWorker", "Checking due alarms and rescheduling")
+        try {
+            // Get database reference (adjust to your singleton, e.g., getDatabase or getInstance)
             val db = AppDatabase.getDatabase(applicationContext)
-            val taskDao = db.scheduledTaskDao()
-            val now = System.currentTimeMillis()
-            val dueTasks = taskDao.getTasksDue(now)
+            // You must implement getDueAlarms in your AlarmDao:
+            // @Query("SELECT * FROM alarms WHERE triggerTimeMillis <= :now")
+            // fun getDueAlarms(now: Long): List<Alarm>
+            val alarms = db.alarmDao().getAll()
 
-            if (dueTasks.isEmpty()) {
-                Log.d("TaskExecutionWorker", "No tasks are due.")
-                return Result.success()
-            }
+            if (alarms.isEmpty()) return Result.success()
 
-            dueTasks.forEach { task ->
-                try {
-                    Log.d("TaskExecutionWorker", "Processing task: ${task.description}")
-
-                    if (task.isRecurring) {
-                        val nextExecutionTime = task.executionTimeMillis + TimeUnit.DAYS.toMillis(1)
-                        if (task.endDateMillis != null) {
-                            // Ranged recurring task with end date
-                            if (nextExecutionTime <= task.endDateMillis) {
-                                val updatedTask = task.copy(executionTimeMillis = nextExecutionTime)
-                                taskDao.update(updatedTask)
-                                AlarmHelper.scheduleInAppAlarm(applicationContext, task.description, nextExecutionTime, task.id)
-                                Log.d("TaskExecutionWorker", "Ranged task '${task.description}' rescheduled.")
-                            } else {
-                                taskDao.deleteTask(task)
-                                Log.d("TaskExecutionWorker", "Ranged task '${task.description}' completed and deleted.")
-                            }
-                        } else {
-                            // Infinite recurring task
-                            val updatedTask = task.copy(executionTimeMillis = nextExecutionTime)
-                            taskDao.update(updatedTask)
-                            AlarmHelper.scheduleInAppAlarm(applicationContext, task.description, nextExecutionTime, task.id)
-                            Log.d("TaskExecutionWorker", "Infinite recurring task '${task.description}' rescheduled.")
-                        }
-                    } else {
-                        // One-time task
-                        taskDao.deleteTask(task)
-                        Log.d("TaskExecutionWorker", "One-time task '${task.description}' deleted after execution.")
+            alarms.forEach { alarm ->
+                if (alarm.isRecurring) {
+                    val cal = java.util.Calendar.getInstance().apply {
+                        timeInMillis = alarm.triggerTimeMillis
+                        add(java.util.Calendar.WEEK_OF_YEAR, 1)
                     }
-                } catch (ex: Exception) {
-                    Log.e("TaskExecutionWorker", "Failed processing task id ${task.id}", ex)
+                    val newTime = cal.timeInMillis
+                    val updatedAlarm = alarm.copy(triggerTimeMillis = newTime)
+                    db.alarmDao().update(updatedAlarm)
+                    AlarmHelper.scheduleSingleAlarm(
+                        applicationContext,
+                        updatedAlarm.message,
+                        newTime,
+                        updatedAlarm.id
+                    )
+                } else {
+                    db.alarmDao().delete(alarm)
                 }
             }
-            Result.success()
-        } catch (ex: Exception) {
-            Log.e("TaskExecutionWorker", "Worker failed", ex)
-            Result.failure()
+
+            return Result.success()
+        } catch (e: Exception) {
+            Log.e("TaskExecutionWorker", "Error in doWork: ${e.message}")
+            return Result.failure()
         }
     }
 }

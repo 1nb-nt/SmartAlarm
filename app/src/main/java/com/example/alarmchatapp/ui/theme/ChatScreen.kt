@@ -30,131 +30,115 @@ import androidx.compose.ui.unit.dp
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import com.example.alarchatmapp.TaskExecutionWorker
-import com.example.alarmchatapp.AppDatabase
-import com.example.alarmchatapp.Alarm
-import com.example.alarmchatapp.network.AlarmApiRequest
-import com.example.alarmchatapp.network.RetrofitClient
+import com.example.alarmchatapp.*
+import com.example.alarmchatapp.network.*
 import com.example.alarmchatapp.ui.theme.AlarmListScreen
 import com.example.alarmchatapp.utils.AlarmHelper
 import com.example.alarmchatapp.utils.LocationUtils
+import com.google.gson.*
 import kotlinx.coroutines.*
+import java.lang.reflect.Type
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
+import com.example.alarmchatapp.R
+
+
+class NotificationDeserializer : JsonDeserializer<AlarmApiResponse.NotificationInfo> {
+    override fun deserialize(json: JsonElement?, typeOfT: Type?, context: JsonDeserializationContext?): AlarmApiResponse.NotificationInfo? {
+        if (json == null || json.isJsonNull) return null
+        return when {
+            json.isJsonObject -> context?.deserialize(json, typeOfT)
+            json.isJsonPrimitive && json.asJsonPrimitive.isBoolean -> null
+            else -> null
+        }
+    }
+}
+
+fun schedulePeriodicChecker(context: Context) {
+    val workRequest = PeriodicWorkRequestBuilder< TaskExecutionWorker>(24, TimeUnit.HOURS).build()
+    WorkManager.getInstance(context).enqueueUniquePeriodicWork("PeriodicChecker", ExistingPeriodicWorkPolicy.KEEP, workRequest)
+    Log.d("ChatScreen", "Scheduled periodic checker task.")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppContent() {
-    var showAlarmList by remember { mutableStateOf(false) }
-    if (showAlarmList) {
-        AlarmListScreen(onBack = { showAlarmList = false })
-    } else {
-        ChatScreen(onShow = { showAlarmList = true })
-    }
+    var showingList by remember { mutableStateOf(false) }
+    if (showingList) AlarmListScreen(onBack = { showingList = false })
+    else ChatScreen(onShow = { showingList = true })
 }
 
 @Composable
 fun ChatScreen(onShow: () -> Unit) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val messageList = remember { mutableStateListOf<String>() }
+    val messages = remember { mutableStateListOf<String>() }
     var input by remember { mutableStateOf(TextFieldValue("")) }
 
-    val locationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        // Handle permission result if needed
-    }
-
-    val notifyPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        // Handle permission result if needed
-    }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val notifyPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     LaunchedEffect(Unit) {
         locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 33) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
             notifyPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
         schedulePeriodicChecker(context)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        verticalArrangement = Arrangement.SpaceBetween
-    ) {
-        TopBarSection(onShow)
-        LogoSection()
-        ButtonControlsSection(onInsert = { text -> input = TextFieldValue(text) })
-        MessageListSection(messageList, modifier = Modifier.weight(1f))
-        InputSection(input, { input = it }, coroutineScope, context, messageList)
+    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), verticalArrangement = Arrangement.SpaceBetween) {
+        TopBar(onShow)
+        Logo()
+        ActionButtons(
+            onAction = { text -> input = TextFieldValue(text) },
+            onConnect = {
+                val loc = LocationUtils.getLastKnownLocation(context)
+                Toast.makeText(context, "Location: $loc", Toast.LENGTH_LONG).show()
+            }
+        )
+        MessageList(messages = messages, modifier = Modifier.weight(1f))
+        InputSection(input, { input = it }, coroutineScope, context, messages)
     }
 }
 
 @Composable
-fun TopBarSection(onShow: () -> Unit) {
-    val context = LocalContext.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(modifier = Modifier.clickable { Toast.makeText(context, "Settings clicked", Toast.LENGTH_SHORT).show() }) {
+fun TopBar(onShow: () -> Unit) {
+    val ctx = LocalContext.current
+    Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.clickable {
+            Toast.makeText(ctx, "Settings clicked", Toast.LENGTH_SHORT).show()
+        }) {
             Icon(Icons.Default.Settings, contentDescription = "Settings")
             Spacer(Modifier.width(8.dp))
-            Text("wow", style = MaterialTheme.typography.bodyMedium)
+            Text("AlarmApp")
         }
         Spacer(Modifier.weight(1f))
-        Button(onClick = onShow) {
-            Text("Manage Alarms")
-        }
+        Button(onClick = onShow) { Text("Manage Alarms") }
     }
 }
 
 @Composable
-fun LogoSection() {
-    val logo: Painter = painterResource(id = com.example.alarmchatapp.R.drawable.wow_logo)
+fun Logo() {
+    val logo: Painter = painterResource(id = R.drawable.wow_logo)
     Box(modifier = Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
         Image(logo, contentDescription = "Logo")
     }
 }
 
 @Composable
-fun ButtonControlsSection(onInsert: (String) -> Unit) {
-    val context = LocalContext.current
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceEvenly
-    ) {
-        Button(onClick = { onInsert("Wake up at 07:00 am") }) { Text("Wake Up") }
-        Button(onClick = { onInsert("Remind me in 1 minute") }) { Text("Remind Me") }
-        Button(onClick = {
-            val loc = LocationUtils.getLastKnownLocation(context)
-            Toast.makeText(context, "Location: $loc", Toast.LENGTH_LONG).show()
-        }) { Text("Connect") }
+fun ActionButtons(onAction: (String) -> Unit, onConnect: () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+        Button(onClick = { onAction("Wake up at 7:00 AM") }) { Text("Wake Up") }
+        Button(onClick = { onAction("Remind me in 1 minute") }) { Text("Remind Me") }
+        Button(onClick = onConnect) { Text("Connect") }
     }
 }
 
 @Composable
-fun MessageListSection(messageList: List<String>, modifier: Modifier = Modifier) {
-    LazyColumn(
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(max = 150.dp)
-            .padding(12.dp),
-        reverseLayout = true
-    ) {
-        items(messageList) { msg ->
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                tonalElevation = 4.dp,
-                modifier = Modifier.padding(vertical = 4.dp)
-            ) {
+fun MessageList(messages: List<String>, modifier: Modifier = Modifier) {
+    LazyColumn(modifier = modifier.fillMaxWidth().padding(12.dp), reverseLayout = true) {
+        items(messages) { msg ->
+            Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 4.dp, modifier = Modifier.padding(vertical = 4.dp)) {
                 Text(msg, modifier = Modifier.padding(12.dp))
             }
         }
@@ -164,340 +148,131 @@ fun MessageListSection(messageList: List<String>, modifier: Modifier = Modifier)
 @Composable
 fun InputSection(
     input: TextFieldValue,
-    onInputChange: (TextFieldValue) -> Unit,
-    coroutineScope: CoroutineScope,
+    onChange: (TextFieldValue) -> Unit,
+    scope: CoroutineScope,
     context: Context,
-    messageList: MutableList<String>
+    messages: MutableList<String>
 ) {
-    val TAG = "ChatScreen"
     Row(
-        modifier = Modifier.fillMaxWidth().padding(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         TextField(
             value = input,
-            onValueChange = onInputChange,
+            onValueChange = onChange,
             modifier = Modifier.weight(1f),
             singleLine = true,
             placeholder = { Text("Type your message") }
         )
-        Spacer(Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(8.dp))
         IconButton(onClick = {
-            val raw = input.text.trim()
-            if (raw.isBlank()) return@IconButton
-            onInputChange(TextFieldValue(""))
+            val text = input.text.trim()
+            if (text.isEmpty()) return@IconButton
+            onChange(TextFieldValue(""))
 
-            coroutineScope.launch {
+            scope.launch {
                 try {
                     val request = AlarmApiRequest(
                         objective = "Alarm Generator",
                         objective_key = "alarm_generator",
                         model = "openai",
-                        inputs = mapOf("user_input" to raw, "ctype" to "text")
+                        inputs = mapOf("user_input" to text, "ctype" to "text")
                     )
-                    val response = RetrofitClient.instance.getAlarmDetails(request)
-                    val alarmTitle = response.title?.takeIf { it.isNotEmpty() } ?: "Alarm"
+                    val apiResponseWrapper = RetrofitClient.instance.getAlarmDetails(request)
+                    val rawJson = apiResponseWrapper.response ?: ""
 
-                    // Keyword-based recurring types (unchanged)
-                    val specialDays = when {
-                        raw.contains("weekdays", true) -> listOf(
-                            Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
-                            Calendar.THURSDAY, Calendar.FRIDAY
-                        )
-                        raw.contains("weekends", true) -> listOf(Calendar.SATURDAY, Calendar.SUNDAY)
-                        raw.contains("everyday", true) || raw.contains("daily", true) -> listOf(
-                            Calendar.SUNDAY, Calendar.MONDAY, Calendar.TUESDAY,
-                            Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY
-                        )
-                        else -> null
-                        //todo :Handle tomorrow here , no extraction needed only api response should be considered
-                    }
-
-                    // Day names map
-                    val dayNameMap = mapOf(
-                        "sunday" to Calendar.SUNDAY,
-                        "monday" to Calendar.MONDAY,
-                        "tuesday" to Calendar.TUESDAY,
-                        "wednesday" to Calendar.WEDNESDAY,
-                        "thursday" to Calendar.THURSDAY,
-                        "friday" to Calendar.FRIDAY,
-                        "saturday" to Calendar.SATURDAY
-                    )
-
-                    // Compose final daysOfWeek (for correct recurring)
-                    var daysOfWeek = response.daysOfWeek ?: specialDays //todo: Special days needed either from input or API
-//                    if (daysOfWeek == null) {
-//                        val detectedDays = dayNameMap.entries.filter { (name, _) ->
-//                            raw.lowercase().contains(name)
-//                        }.map { it.value }
-//                        daysOfWeek = if (detectedDays.isNotEmpty()) detectedDays else null
-//                    }
-
-                    val isRecurring =
-                        (response.recurrence?.lowercase(Locale.getDefault()) ?: "once") != "once" ||
-                                (daysOfWeek?.size ?: 0) > 1//todo:needed either from input or API --find a better logic.
-
-                    // Parsed date from API or raw (priority: API > custom date > day+time > time only)
-                    var eventDate = parseApiDateTime(response.datetime, raw)//todo:Include extractcustomdatefrom raw inside parse api date and time
-                    if (eventDate == null) {
-                        eventDate = extractCustomDateFromRaw(raw)
-                    }
-                    if (eventDate == null) {
-                        val dayAndTime = extractDayAndTimeFromRaw(raw)
-                        if (dayAndTime != null) {
-                            val (dayOfWeek, timePair) = dayAndTime
-                            val (hour, minute) = timePair
-                            val nextTrigger = getNextOccurrence(hour, minute, dayOfWeek)
-                            eventDate = Date(nextTrigger)
-                            if (daysOfWeek == null) daysOfWeek = listOf(dayOfWeek)
+                    val cleanedJson = rawJson.replace("```")
+                        if (!cleanedJson.startsWith("{")) {
+                            messages.add(0, "Invalid API response format.")
+                            return@launch
                         }
+
+                        val gson = GsonBuilder()
+                        .registerTypeAdapter(AlarmApiResponse.NotificationInfo::class.java, NotificationDeserializer())
+                        .create()
+
+                    val response = gson.fromJson(cleanedJson, AlarmApiResponse::class.java)
+                    val title = response.title ?: "Alarm"
+                    val dateVal = response.datetime
+
+                    val eventDate = parseIso8601Date(dateVal) ?: parseTimeString(response.time)
+                    if (eventDate == null) {
+                        messages.add(0, "Could not parse date/time")
+                        return@launch
                     }
-                    if (eventDate == null) {
-                        val extractedTime = extractTimeFromRaw(raw)
-                        if (extractedTime != null) {
-                            val cal = Calendar.getInstance()
-                            cal.set(Calendar.SECOND, 0)
-                            cal.set(Calendar.MILLISECOND, 0)
-                            cal.set(Calendar.HOUR_OF_DAY, extractedTime.first)
-                            cal.set(Calendar.MINUTE, extractedTime.second)
-                            if (cal.timeInMillis <= System.currentTimeMillis() && raw.contains("today", true)) {
-                                cal.add(Calendar.DATE, 1)
-                            }
-                            eventDate = cal.time
-                        }
-                    }//todo:Return type should be standard daate or calendar object
-                    //todo:Combine all date and time information inside one value,if multiple needed just list of calendar or list ofstandara date
-                    if (eventDate == null) {
-                        messageList.add(0, "Could not parse date/time from input or response")
+
+                    if(eventDate.before(Date())){
+                        messages.add(0, "Cannot set alarm in the past")
                         return@launch
                     }
 
                     val dao = AppDatabase.getDatabase(context).alarmDao()
+                    val isRecurring = (response.recurrence ?: "once").lowercase() != "once" || (response.daysOfWeek?.size ?: 0) > 1
 
-                    if (!isRecurring) {
+                    if (isRecurring) {
                         val calendar = Calendar.getInstance().apply { time = eventDate }
-                        val now = Calendar.getInstance()
-                        if (calendar.before(now)) {
-                            messageList.add(0, "Cannot schedule alarm in the past")
-                            return@launch
-                        }
-                        val triggerTimeMillis =
-                            getNextValidAlarmTime(calendar.get(Calendar.HOUR_OF_DAY), calendar.get(Calendar.MINUTE), raw)
-                        val alarm = Alarm(
-                            message = alarmTitle,
-                            triggerTimeMillis = triggerTimeMillis,
-                            isRecurring = false
-                        )
-                        val alarmId = dao.insert(alarm).toInt()
-                        AlarmHelper.scheduleSingleAlarm(context, alarmTitle, triggerTimeMillis, alarmId)
-                        messageList.add(
-                            0,
-                            "Alarm '${alarmTitle}' set for ${
-                                SimpleDateFormat(
-                                    "EEE, dd MMM yyyy hh:mm a",
-                                    Locale.getDefault()
-                                ).format(Date(triggerTimeMillis))
-                            }"
-                        )
+                        val scheduleDays = response.daysOfWeek ?: listOf(calendar.get(Calendar.DAY_OF_WEEK))
+                        val alarm = Alarm(message = title, triggerTimeMillis = calendar.timeInMillis, isRecurring = true)
+                        val id = dao.insert(alarm).toInt()
+                        AlarmHelper.scheduleRecurringAlarm(context, title, calendar, scheduleDays, id)
+                        messages.add(0, "Set recurring alarm for ${scheduleDays.joinToString()}")
                     } else {
-                        val calendar = Calendar.getInstance().apply { time = eventDate }
-                        val hourOfDay = calendar.get(Calendar.HOUR_OF_DAY)
-                        val minute = calendar.get(Calendar.MINUTE)
-                        val finalDaysOfWeek: List<Int> = daysOfWeek ?: listOf(calendar.get(Calendar.DAY_OF_WEEK))
-
-                        val alarm = Alarm(
-                            message = alarmTitle,
-                            triggerTimeMillis = eventDate.time,
-                            isRecurring = true
-                        )
-                        val alarmId = dao.insert(alarm).toInt()
-
-                        finalDaysOfWeek.forEach { day ->
-                            val nextTriggerTime = getNextOccurrence(hourOfDay, minute, day)
-                            // Optionally log trigger time
-                        }
-
-                        AlarmHelper.scheduleWeeklyAlarms(
-                            context,
-                            alarmTitle,
-                            hourOfDay,
-                            minute,
-                            finalDaysOfWeek,
-                            alarmId
-                        )
-                        messageList.add(
-                            0,
-                            "Recurring alarm '${alarmTitle}' set starting ${
-                                SimpleDateFormat(
-                                    "EEE, hh:mm a",
-                                    Locale.getDefault()
-                                ).format(eventDate)
-                            } on days ${finalDaysOfWeek.joinToString { getDayName(it) }}"
-                        )
+                        val alarm = Alarm(message = title, triggerTimeMillis = eventDate.time, isRecurring = false)
+                        val id = dao.insert(alarm).toInt()
+                        AlarmHelper.scheduleSingleAlarm(context, title, eventDate.time, id)
+                        messages.add(0, "Alarm set for ${formatDate(eventDate)}")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed scheduling alarm", e)
-                    messageList.add(0, "Error scheduling alarm: ${e.message ?: "unknown error"}")
+                    Log.e("ChatScreen", "Error scheduling alarm", e)
+                    messages.add(0, "Error scheduling alarm: ${e.localizedMessage}")
                 }
             }
         }) {
-            Icon(imageVector = Icons.Filled.Send, contentDescription = "Send", tint = Color.Blue)
+            Icon(imageVector = Icons.Default.Send, contentDescription = "Send", tint = Color.Blue)
         }
     }
 }
-fun extractCustomDateFromRaw(raw: String): Date? {
-    val patterns = listOf(
-        Pair("""(\d{2}-\d{2}-\d{4})\s*at\s*(\d{1,2})(:(\d{2}))?\s*(am|pm)""", "dd-MM-yyyy hh:mm a"),
-        Pair("""(\d{2}/\d{2}/\d{4})\s*at\s*(\d{1,2})(:(\d{2}))?\s*(am|pm)""", "dd/MM/yyyy hh:mm a"),
-        Pair("""(\d{4}-\d{2}-\d{2})\s*at\s*(\d{1,2})(:(\d{2}))?\s*(am|pm)""", "yyyy-MM-dd hh:mm a"),
-        Pair("""(\d{2}-\d{2}-\d{4})""", "dd-MM-yyyy"),
-        Pair("""(\d{2}/\d{2}/\d{4})""", "dd/MM/yyyy"),
-        Pair("""(\d{4}-\d{2}-\d{2})""", "yyyy-MM-dd")
-    )
-    for ((pattern, format) in patterns) {
-        val regex = Regex(pattern, RegexOption.IGNORE_CASE)
-        val match = regex.find(raw)
-        if (match != null) {
-            val datePart = match.groups[1]?.value ?: continue
-            val hour = match.groups[2]?.value?.toIntOrNull() ?: 0
-            val minute = match.groups[4]?.value?.toIntOrNull() ?: 0
-            val amPm = match.groups[5]?.value ?: "am"
-            try {
-                val sdf = SimpleDateFormat(format, Locale.getDefault())
-                val dateString = if (format.contains("hh")) {
-                    "$datePart ${"%02d".format(hour)}:${"%02d".format(minute)} $amPm"
-                } else{
-                    datePart
-                }
-                sdf.timeZone = TimeZone.getDefault()
-                return sdf.parse(dateString)
-            } catch (_: Exception) { }
-        }
-    }
-    return null
-}
 
-fun extractDayAndTimeFromRaw(raw: String): Pair<Int, Pair<Int, Int>>? {
-    val days = mapOf(
-        "sunday" to Calendar.SUNDAY,
-        "monday" to Calendar.MONDAY,
-        "tuesday" to Calendar.TUESDAY,
-        "wednesday" to Calendar.WEDNESDAY,
-        "thursday" to Calendar.THURSDAY,
-        "friday" to Calendar.FRIDAY,
-        "saturday" to Calendar.SATURDAY
-    )
-    val dayMatch = days.entries.find { raw.lowercase().contains(it.key,ignoreCase = true) }?.value
-    val time = extractTimeFromRaw(raw)
-    return if (dayMatch != null && time != null) Pair(dayMatch, time) else null
-}
+// Helper functions used in InputSection:
 
-fun extractTimeFromRaw(raw: String): Pair<Int, Int>? {
-    val match = Regex("""\b(\d{1,2})(:(\d{2}))?\s*(am|pm)\b""", RegexOption.IGNORE_CASE).find(raw)
-    if (match != null) {
-        var hour = match.groups[1]?.value?.toIntOrNull() ?: return null
-        val minute = match.groups[3]?.value?.toIntOrNull() ?: 0
-        val amPm = match.groups[4]?.value?.lowercase(Locale.getDefault())
-        if (amPm == "pm" && hour < 12) hour += 12
-        if (amPm == "am" && hour == 12) hour = 0
-        return Pair(hour, minute)
-    }
-    return null
-}
-
-fun parseApiDateTime(apiTime: String?, raw: String): Date? {
+fun parseIso8601Date(dateStr: String?): Date? {
+    if (dateStr.isNullOrBlank()) return null
     val formats = listOf(
-        "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
         "yyyy-MM-dd'T'HH:mm:ssXXX",
-        "yyyy-MM-dd'T'HH:mm:ss'Z'",
-        "yyyy-MM-dd'T'HH:mm:ss",
-        "dd-MM-yyyy HH:mm",
-        "yyyy-MM-dd HH:mm",
-        "yyyy-MM-dd",
-        "dd-MM-yyyy"
+        "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+        "yyyy-MM-dd'T'HH:mm:ss'Z'"
     )
-
-    if (!apiTime.isNullOrBlank()) {
-        val locale = Locale.getDefault()
-        for (format in formats) {
-            try {
-                val sdf = SimpleDateFormat(format, locale)
-                if (!format.contains("XXX")) {
-                    sdf.timeZone = TimeZone.getTimeZone("UTC")
-                }
-                sdf.isLenient = false
-                return sdf.parse(apiTime)
-            } catch (e: Exception) {
-                // ignore parse errors and try others
-            }
-        }
+    for (format in formats) {
+        try {
+            val sdf = SimpleDateFormat(format, Locale.getDefault())
+            sdf.isLenient = false
+            val date = sdf.parse(dateStr.trim())
+            if (date != null) return date
+        } catch (_: Exception) {}
     }
     return null
 }
 
-fun schedulePeriodicChecker(context: Context) {
-    val workRequest = PeriodicWorkRequestBuilder<TaskExecutionWorker>(
-        24, TimeUnit.HOURS
-    ).build()
-    WorkManager.getInstance().enqueueUniquePeriodicWork(
-        "PeriodicChecker",
-        ExistingPeriodicWorkPolicy.KEEP,
-        workRequest
-    )
-    Log.d("ChatScreen", "Scheduled periodic checker every 24 hours")
+fun parseTimeString(timeStr: String?): Date? {
+    if (timeStr.isNullOrBlank()) return null
+    return try {
+        val sdf = SimpleDateFormat("hh:mm a", Locale.getDefault())
+        val cal = Calendar.getInstance()
+        val parsedCal = Calendar.getInstance()
+        parsedCal.time = sdf.parse(timeStr.trim())!!
+        cal.set(Calendar.HOUR_OF_DAY, parsedCal.get(Calendar.HOUR_OF_DAY))
+        cal.set(Calendar.MINUTE, parsedCal.get(Calendar.MINUTE))
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        if (cal.before(Calendar.getInstance())) cal.add(Calendar.DAY_OF_YEAR, 1)
+        cal.time
+    } catch (_: Exception) {
+        null
+    }
 }
 
-fun getNextOccurrence(hour: Int, minute: Int, dayOfWeek: Int): Long {
-    val now = Calendar.getInstance()
+fun formatDate(date: Date): String = SimpleDateFormat("EEE, dd MMM yyyy hh:mm a", Locale.getDefault()).format(date)
 
-    val calendar = Calendar.getInstance()
-    calendar.set(Calendar.HOUR_OF_DAY, hour)
-    calendar.set(Calendar.MINUTE, minute)
-    calendar.set(Calendar.SECOND, 0)
-    calendar.set(Calendar.MILLISECOND, 0)
-    calendar.set(Calendar.DAY_OF_WEEK, dayOfWeek)
-    if (calendar.timeInMillis <= now.timeInMillis) {
-        calendar.add(Calendar.WEEK_OF_YEAR, 7)
-    }
-
-    return calendar.timeInMillis
-}
-
-fun getDayName(dayOfWeek: Int): String =
-    listOf(
-        "Sunday",
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-        "Saturday"
-    )[dayOfWeek - 1]
-
-fun getNextValidAlarmTime(hour: Int, minute: Int, rawText: String): Long {
-    val now = Calendar.getInstance()
-    val alarmTime = Calendar.getInstance().apply {
-        set(Calendar.HOUR_OF_DAY, hour)
-        set(Calendar.MINUTE, minute)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-    }
-
-    when {
-        rawText.contains("today", true) -> {
-            if (alarmTime.timeInMillis <= now.timeInMillis) {
-                alarmTime.add(Calendar.DATE, 1)
-            }
-        }
-        rawText.contains("tomorrow", true) -> {
-            alarmTime.add(Calendar.DATE, 1)
-        }
-        else -> {
-            if (alarmTime.timeInMillis <= now.timeInMillis) {
-                alarmTime.add(Calendar.DATE, 1)
-            }
-        }
-    }
-    return alarmTime.timeInMillis
-}
-
+fun dayName(day: Int): String = listOf("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")[day-1]

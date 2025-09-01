@@ -4,10 +4,6 @@ import retrofit2.http.Body
 import retrofit2.http.POST
 
 interface ApiService {
-    /**
-     * Sends the user's text to the API and expects an AlarmApiResponse back.
-     */
-    // **THE FIX**: This MUST match the @app.route in your Python script.
     @POST("generate")
-    suspend fun getAlarmDetails(@Body request: AlarmApiRequest): AlarmApiResponse
+    suspend fun getAlarmDetails(@Body request: AlarmApiRequest): AlarmApiResponse.AlarmApiWrapper
 }

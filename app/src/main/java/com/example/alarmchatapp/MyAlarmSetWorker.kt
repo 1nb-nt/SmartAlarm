@@ -7,45 +7,28 @@ import androidx.work.WorkerParameters
 import com.example.alarmchatapp.utils.AlarmHelper
 import java.util.*
 
-class MyAlarmSetWorker(
-    appContext: Context,
-    workerParams: WorkerParameters
-) : Worker(appContext, workerParams) {
+class MyAlarmSetWorker(private val context: Context, params: WorkerParameters) : Worker(context, params) {
 
     override fun doWork(): Result {
-        val alarmTitle = inputData.getString("ALARM_TITLE") ?: "Scheduled Alarm"
-        val eventTimeMillis = inputData.getLong("EVENT_TIME", -1L)
-        val alarmId = inputData.getInt("ALARM_ID", 0)
+        try {
+            val title = inputData.getString("ALARM_TITLE") ?: "Alarm"
+            val time = inputData.getLong("EVENT_TIME", -1L)
+            val id = inputData.getInt("ALARM_ID", -1)
 
-        if (eventTimeMillis == -1L) {
-            Log.e("MyAlarmSetWorker", "No event time provided for alarm.")
-            return Result.failure()
-        }
+            if (time == -1L || id == -1) {
+                Log.e("MyAlarmSetWorker", "Missing alarm info")
+                return Result.failure()
+            }
 
-        val cal = Calendar.getInstance().apply { timeInMillis = eventTimeMillis }
-        val hour = cal.get(Calendar.HOUR_OF_DAY)
-        val minute = cal.get(Calendar.MINUTE)
-
-        return try {
-            // Set alarm in default Clock app
-            AlarmHelper.scheduleWeeklyAlarms(
-                applicationContext,
-                alarmTitle,
-                hour,
-                minute,
-                null,
-                baseAlarmId = alarmId
-            )
-            Log.d("MyAlarmSetWorker", "Alarm set in clock app at $hour:$minute.")
-
-            // Also schedule exact alarm in the app as fallback
-            AlarmHelper.scheduleInAppAlarm(applicationContext, alarmTitle, eventTimeMillis, alarmId)
-            Log.d("MyAlarmSetWorker", "App alarm scheduled at ${Date(eventTimeMillis)}.")
-
-            Result.success()
+            val cal = Calendar.getInstance().apply {
+                timeInMillis = time
+            }
+            AlarmHelper.scheduleRecurringAlarm(context, title, cal, listOf(cal.get(Calendar.DAY_OF_WEEK)), id)
+            Log.d("MyAlarmSetWorker", "Alarm scheduled in worker")
+            return Result.success()
         } catch (e: Exception) {
-            Log.e("MyAlarmSetWorker", "Failed to set alarm", e)
-            Result.failure()
+            Log.e("MyAlarmSetWorker", "Error scheduling alarm", e)
+            return Result.failure()
         }
     }
 }
