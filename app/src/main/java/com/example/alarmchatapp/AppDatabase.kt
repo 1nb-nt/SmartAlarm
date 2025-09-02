@@ -1,11 +1,15 @@
 package com.example.alarmchatapp
 
 import android.content.Context
+
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 
-@Database(entities = [Alarm::class, ScheduledTask::class], version = 1)
+@Database(entities = [Alarm::class, ScheduledTask::class], version = 2)
+@TypeConverters(Converters::class)
+
 abstract class AppDatabase : RoomDatabase() {
     abstract fun alarmDao(): AlarmDao
     abstract fun scheduledTaskDao(): ScheduledTaskDao

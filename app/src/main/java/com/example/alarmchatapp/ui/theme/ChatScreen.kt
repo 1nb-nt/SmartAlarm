@@ -7,6 +7,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -27,17 +28,39 @@ import com.example.alarmchatapp.AppDatabase
 import com.example.alarmchatapp.Alarm
 import com.example.alarmchatapp.network.AlarmApiRequest
 import com.example.alarmchatapp.network.RetrofitClient
+import com.example.alarmchatapp.ui.theme.AlarmListScreen
 import com.example.alarmchatapp.utils.AlarmHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+import com.example.alarmchatapp.R
+import org.threeten.bp.OffsetDateTime
+import org.threeten.bp.format.DateTimeFormatter
+import java.util.Date
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.painterResource
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+
 
 @Composable
 fun AppContent() {
-    ChatScreen(onShow = {})
+    val navController = rememberNavController()
+    NavHost(navController, startDestination = "chat") {
+        composable("chat") {
+            ChatScreen(onShow = {
+                navController.navigate("alarms")
+            })
+        }
+        composable("alarms") {
+            AlarmListScreen(onBack = {
+                navController.popBackStack()
+            })
+        }
+    }
 }
-
 @Composable
 fun ChatScreen(onShow: () -> Unit) {
     val context = LocalContext.current
@@ -59,9 +82,46 @@ fun ChatScreen(onShow: () -> Unit) {
     ) {
         TopBar(onShow)
         Spacer(Modifier.height(6.dp))
+        OldUiButtons(onCommandClick = { commandText ->
+            input = TextFieldValue(commandText)
+        })
         MessageList(messages)
         Spacer(Modifier.height(6.dp))
         InputSection(input, { input = it }, scope, context, messages)
+    }
+}
+
+@Composable
+fun OldUiButtons(onCommandClick: (String) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Image(
+            painter = painterResource(id = R.drawable.wow_logo),
+            contentDescription = "Wow Logo",
+            modifier = Modifier.size(200.dp)
+        )
+        Spacer(Modifier.height(20.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Button(
+                onClick = { onCommandClick("Wake Up at 7 AM tomorrow") },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Wake Up")
+            }
+            Button(
+                onClick = { onCommandClick("Remind me at 9 AM daily") },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Remind Me")
+            }
+        }
     }
 }
 
@@ -117,7 +177,7 @@ fun InputSection(
         IconButton(onClick = {
             val rawText = input.text.trim()
             if (rawText.isEmpty()) return@IconButton
-            onInputChange(TextFieldValue(""))
+            onInputChange(TextFieldValue(""))  // Clear input
 
             scope.launch {
                 try {
@@ -135,21 +195,41 @@ fun InputSection(
                     val baseDays = response.daysOfWeek ?: extractDays(rawTextLower)
                     val filteredDays = baseDays?.let { days -> filterExcludedDays(days, exclusions) } ?: emptyList()
 
-                    val parsedDate = parseDate(response.datetime)
-                        ?: parseCustomDate(rawText)
-                        ?: extractDayTime(rawText)?.let { (day, time) ->
-                            val cal = Calendar.getInstance()
-                            cal.set(Calendar.HOUR_OF_DAY, time.first)
-                            cal.set(Calendar.MINUTE, time.second)
-                            getNextOccurrence(cal, day)
-                        }
-                        ?: extractTime(rawText)?.let { (hour, min) ->
-                            val cal = Calendar.getInstance()
-                            cal.set(Calendar.HOUR_OF_DAY, hour)
-                            cal.set(Calendar.MINUTE, min)
-                            if (cal.before(Calendar.getInstance()) && rawTextLower.contains("today")) cal.add(Calendar.DATE, 1)
+                    // Attempt to parse date from API ISO string with ThreeTenABP
+                    val parsedDate = parseDateISO(response.datetime) ?: parseDate(response.datetime) ?: run {
+                        // Fallback parsing: parse custom date and explicitly assign time
+                        val dateOnly = parseCustomDate(rawText)
+                        if (dateOnly != null) {
+                            val time = extractTime(rawText)
+                            val cal = Calendar.getInstance(TimeZone.getDefault())
+                            cal.time = dateOnly
+                            if (time != null) {
+                                cal.set(Calendar.HOUR_OF_DAY, time.first)
+                                cal.set(Calendar.MINUTE, time.second)
+                            } else {
+                                cal.set(Calendar.HOUR_OF_DAY, 9)
+                                cal.set(Calendar.MINUTE, 0)
+                            }
+                            cal.set(Calendar.SECOND, 0)
+                            cal.set(Calendar.MILLISECOND, 0)
                             cal.time
-                        }
+                        } else null
+                    } ?: extractDayTime(rawText)?.let { (day, time) ->
+                        val cal = Calendar.getInstance(TimeZone.getDefault())
+                        cal.set(Calendar.HOUR_OF_DAY, time.first)
+                        cal.set(Calendar.MINUTE, time.second)
+                        cal.set(Calendar.SECOND, 0)
+                        cal.set(Calendar.MILLISECOND, 0)
+                        getNextOccurrence(cal, day)
+                    } ?: extractTime(rawText)?.let { (hour, min) ->
+                        val cal = Calendar.getInstance(TimeZone.getDefault())
+                        cal.set(Calendar.HOUR_OF_DAY, hour)
+                        cal.set(Calendar.MINUTE, min)
+                        cal.set(Calendar.SECOND, 0)
+                        cal.set(Calendar.MILLISECOND, 0)
+                        if (cal.before(Calendar.getInstance())) cal.add(Calendar.DATE, 1)
+                        cal.time
+                    }
 
                     if (parsedDate == null) {
                         messages.add(0, "Cannot parse alarm date/time.")
@@ -199,8 +279,17 @@ fun InputSection(
     }
 }
 
-// Helpers: Implement precisely per naming & signatures used above
 
+// Helpers: Implement precisely per naming & signatures used above
+fun parseDateISO(dateStr: String?): Date? {
+    return try {
+        if (dateStr == null) return null
+        val odt = OffsetDateTime.parse(dateStr, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+            return Date(odt.toInstant().toEpochMilli())  // <-- CORRECT FOR THREETENABP!
+    } catch (e: Exception) {
+        null
+    }
+}
 fun parseDate(dateStr: String?): Date? {
     if (dateStr.isNullOrEmpty()) return null
     val formats = listOf("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", "yyyy-MM-dd'T'HH:mm:ssXXX", "yyyy-MM-dd'T'HH:mm:ss'Z'",
@@ -209,7 +298,13 @@ fun parseDate(dateStr: String?): Date? {
         try {
             val sdf = SimpleDateFormat(fmt, Locale.getDefault())
             sdf.isLenient = false
-            if (!fmt.contains("XXX") && !fmt.contains("'Z'")) sdf.timeZone = TimeZone.getTimeZone("UTC")
+            if (fmt == "yyyy-MM-dd'T'HH:mm:ss'Z'") {
+                sdf.timeZone = TimeZone.getTimeZone("UTC")
+            } else {
+                // Use default device timezone for other formats
+                sdf.timeZone = TimeZone.getDefault()
+            }
+
             val d = sdf.parse(dateStr)
             if (d != null) return d
         } catch (_: Exception) {}
@@ -223,11 +318,12 @@ fun parseCustomDate(text: String): Date? {
         val match = Regex(regex, RegexOption.IGNORE_CASE).find(text)
         if (match != null) {
             val dateText = match.value
-            val formats = listOf("dd-MM-yyyy", "dd/MM/yyyy", "MMMM d", "MMMM dd")
+            val formats = listOf("dd-MM-yyyy HH:mm", "dd/MM/yyyy HH:mm", "dd-MM-yyyy", "dd/MM/yyyy", "MMMM d", "MMMM dd")
             for (fmt in formats) {
                 try {
                     val sdf = SimpleDateFormat(fmt, Locale.getDefault())
                     sdf.isLenient = false
+                    sdf.timeZone= TimeZone.getDefault()
                     val d = sdf.parse(dateText)
                     if (d != null) return d
                 } catch (_: Exception) {}
@@ -265,15 +361,20 @@ fun getNextOccurrence(cal: Calendar, targetDay: Int): Date {
 
 fun getValidTriggerTime(cal: Calendar, rawText: String): Long {
     val now = Calendar.getInstance()
+
     if (rawText.contains("today", ignoreCase = true) && cal.before(now)) {
         cal.add(Calendar.DATE, 1)
     } else if (rawText.contains("tomorrow", ignoreCase = true)) {
-        cal.add(Calendar.DATE, 1)
+        // Only add a day if not already shifted by parser
+        if (cal.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR)) {
+            cal.add(Calendar.DATE, 1)
+        }
     } else if (cal.before(now)) {
         cal.add(Calendar.DATE, 1)
     }
     return cal.timeInMillis
 }
+
 
 fun adjustToNextValidDate(date: Date, timezone: TimeZone): Date {
     val cal = Calendar.getInstance(timezone).apply { time = date }
@@ -314,5 +415,7 @@ fun extractDays(text: String): List<Int>? {
     }
 }
 
-    fun formatDate(millis: Long): String =
-        SimpleDateFormat("EEE, dd MMM yyyy hh:mm a", Locale.getDefault()).format(Date(millis))
+fun formatDate(millis: Long): String =
+    SimpleDateFormat("EEE, dd MMM yyyy hh:mm a", Locale.getDefault()).apply {
+        timeZone = TimeZone.getDefault()
+    }.format(Date(millis))

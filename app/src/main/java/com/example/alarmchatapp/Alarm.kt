@@ -9,5 +9,6 @@ data class Alarm(
     val id: Int = 0,
     val message: String,
     val triggerTimeMillis: Long,
-    val isRecurring: Boolean
+    val isRecurring: Boolean,
+    val recurringDays: List<Int>? = null
 )
