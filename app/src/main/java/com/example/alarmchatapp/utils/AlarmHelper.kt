@@ -12,71 +12,55 @@ import java.util.*
 
 object AlarmHelper {
 
-    // Set alarm in the device's default Clock app with optional recurrence days
+    // Schedule multiple weekly days alarms
     fun scheduleWeeklyAlarms(
         context: Context,
         label: String,
         hour: Int,
         minute: Int,
-        selectedDays: List<Int>?, // Should match Calendar.DAY_OF_WEEK, ex: Monday=2
+        selectedDays: List<Int>,
         baseAlarmId: Int
     ) {
         val times = getNextAlarmTimes(hour, minute, selectedDays)
-        for ((idx, time) in times.withIndex()) {
-            val alarmIdForDay = baseAlarmId + idx
-            scheduleInAppAlarm(context, "$label (${getDayNameByCalendar(selectedDays?.getOrNull(idx) ?: 1)})", time, alarmIdForDay)
+        for ((index, time) in times.withIndex()) {
+            val id = baseAlarmId * 10 + index
+            val dayLabel = "${label} (${getDayNameByCalendar(selectedDays.getOrNull(index) ?: Calendar.SUNDAY)})"
+            scheduleAlarm(context, dayLabel, time, id)
         }
     }
 
-    fun scheduleSingleAlarm(context: Context, label: String, executionTime: Long, alarmId: Int) {
+    fun scheduleSingleAlarm(context: Context, label: String, triggerTime: Long, alarmId: Int) {
+        scheduleAlarm(context, label, triggerTime, alarmId)
+    }
+
+    private fun scheduleAlarm(context: Context, label: String, time: Long, alarmId: Int) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (!alarmManager.canScheduleExactAlarms()) {
-                Toast.makeText(context, "Permission needed to schedule exact alarms.", Toast.LENGTH_LONG).show()
-                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                Toast.makeText(context, "Allow exact alarm permission", Toast.LENGTH_LONG).show()
+                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
                 context.startActivity(intent)
                 return
             }
         }
+
         val intent = Intent(context, AlarmReceiver::class.java).apply {
             putExtra("ALARM_LABEL", label)
             putExtra("ALARM_ID", alarmId)
         }
+
         val pendingIntent = PendingIntent.getBroadcast(
             context,
             alarmId,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, executionTime, pendingIntent)
-        Toast.makeText(context, "One-time alarm scheduled: $label at ${Date(executionTime)}", Toast.LENGTH_LONG).show()
-    }
 
-
-    fun scheduleInAppAlarm(context: Context, label: String, executionTime: Long, alarmId: Int) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (!alarmManager.canScheduleExactAlarms()) {
-                Toast.makeText(context, "Permission needed to schedule exact alarms.", Toast.LENGTH_LONG).show()
-                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
-                return
-            }
-        }
-        val intent = Intent(context, AlarmReceiver::class.java).apply {
-            putExtra("ALARM_LABEL", label)
-            putExtra("ALARM_ID", alarmId)//todo:if its recurring observe the db and change the next alarm to assign it for next week.
-        }
-        val pendingIntent = PendingIntent.getBroadcast(
-            context,
-            alarmId,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, executionTime, pendingIntent)
-        Toast.makeText(context, "Alarm scheduled: $label at ${Date(executionTime)}", Toast.LENGTH_LONG).show()
+        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, time, pendingIntent)
+        Toast.makeText(context, "Alarm scheduled: $label at ${Date(time)}", Toast.LENGTH_LONG).show()
     }
 
     fun cancelScheduledAlarm(context: Context, alarmId: Int) {
@@ -92,31 +76,26 @@ object AlarmHelper {
     }
 }
 
-// This function assumes selectedDays uses Calendar.DAY_OF_WEEK (1=Sunday, ..., 7=Saturday)
-fun getNextAlarmTimes(hour: Int, minute: Int, selectedDays: List<Int>?): List<Long> {
+fun getNextAlarmTimes(hour: Int, minute: Int, selectedDays: List<Int>): List<Long> {
     val times = mutableListOf<Long>()
-    if (selectedDays.isNullOrEmpty()) return times
     val now = Calendar.getInstance()
-    for (dayOfWeek in selectedDays) {
-        val alarmTime = Calendar.getInstance().apply {
-            set(Calendar.DAY_OF_WEEK, dayOfWeek)
+    for (day in selectedDays) {
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.DAY_OF_WEEK, day)
             set(Calendar.HOUR_OF_DAY, hour)
             set(Calendar.MINUTE, minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        if (alarmTime.timeInMillis <= now.timeInMillis) {
-            alarmTime.add(Calendar.WEEK_OF_YEAR, 1)
+        if (cal.timeInMillis <= now.timeInMillis) {
+            cal.add(Calendar.WEEK_OF_YEAR, 1)
         }
-        times.add(alarmTime.timeInMillis)
+        times.add(cal.timeInMillis)
     }
     return times
 }
 
-
-// Helper: Calendar.DAY_OF_WEEK is 1=Sunday ... 7=Saturday
-fun getDayNameByCalendar(calendarDay: Int): String {
-    return listOf("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")[
-        (if (calendarDay in 1..7) calendarDay else 1) - 1
-    ]
+fun getDayNameByCalendar(day: Int): String {
+    val days = listOf("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")
+    return days.getOrElse(day - 1) { "Unknown" }
 }

@@ -2,41 +2,34 @@ package com.example.alarmchatapp.network
 
 import com.google.gson.annotations.SerializedName
 
-// Data class for the JSON you send TO the API (This remains the same)
 data class AlarmApiRequest(
     val objective: String,
     val objective_key: String,
     val model: String,
-    val inputs: Map<String, String>  // or a dedicated data class if preferred
+    val inputs: Map<String, String>
 )
 
-// **MODIFIED**: Data class that now perfectly matches the JSON you receive FROM the API
 data class AlarmApiResponse(
     @SerializedName("p_type")
     val pType: String,
-
     @SerializedName("alarm type")
     val alarmType: String,
-
     val title: String,
     val datetime: String?,
-
-    val time: String,
-    val location: String?, // The '?' makes it nullable to handle `null` values
-    val distance: String?, // The '?' makes it nullable to handle `null` values
-
-    val timezone: String,
-    val recurrence: String,
+    val time: String?,
+    val location: String?,
+    val distance: String?,
+    val timezone: String?,
+    val recurrence: String?,
     val daysOfWeek: List<Int>?,
-
-    val notification: NotificationInfo // A nested data class for the "notification" object
+    val notification: NotificationInfo?
 ) {
-    // **NEW**: A separate data class to represent the nested "notification" object in the JSON
     data class NotificationInfo(
+        @SerializedName("important")
+        val important: Boolean = false,
         @SerializedName("30_minutes_before")
-        val thirtyMinutesBefore: Boolean,
-
+        val thirtyMinutesBefore: Boolean = false,
         @SerializedName("10_minutes_before")
-        val tenMinutesBefore: Boolean
+        val tenMinutesBefore: Boolean = false
     )
 }

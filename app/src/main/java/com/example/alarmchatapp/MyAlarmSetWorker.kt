@@ -33,13 +33,13 @@ class MyAlarmSetWorker(
                 alarmTitle,
                 hour,
                 minute,
-                null,
+                listOf(Calendar.getInstance().get(Calendar.DAY_OF_WEEK)),
                 baseAlarmId = alarmId
             )
             Log.d("MyAlarmSetWorker", "Alarm set in clock app at $hour:$minute.")
 
             // Also schedule exact alarm in the app as fallback
-            AlarmHelper.scheduleInAppAlarm(applicationContext, alarmTitle, eventTimeMillis, alarmId)
+            AlarmHelper.scheduleSingleAlarm(applicationContext, alarmTitle, eventTimeMillis, alarmId)
             Log.d("MyAlarmSetWorker", "App alarm scheduled at ${Date(eventTimeMillis)}.")
 
             Result.success()

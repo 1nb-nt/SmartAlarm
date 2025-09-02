@@ -10,12 +10,15 @@ interface AlarmDao {
     @Query("SELECT * FROM alarms ORDER BY triggerTimeMillis ASC")
     suspend fun getAll(): List<Alarm>
 
+    @Query("SELECT * FROM alarms WHERE triggerTimeMillis >= :start ORDER BY triggerTimeMillis ASC LIMIT :limit")
+    suspend fun getUpcomingAlarms(start: Long, limit: Int): List<Alarm>
+
     @Query("SELECT * FROM alarms WHERE id = :id")
     suspend fun getById(id: Int): Alarm?
 
-    @Delete
-    suspend fun delete(alarm: Alarm)
-
     @Update
     suspend fun update(alarm: Alarm)
+
+    @Delete
+    suspend fun delete(alarm: Alarm)
 }
