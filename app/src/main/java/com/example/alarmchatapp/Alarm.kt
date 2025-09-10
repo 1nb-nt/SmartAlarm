@@ -10,5 +10,5 @@ data class Alarm(
     val message: String,
     val triggerTimeMillis: Long,
     val isRecurring: Boolean,
-    val recurringDays: List<Int>? = null
+    val recurringDays: List<Int>? // stored via TypeConverter
 )

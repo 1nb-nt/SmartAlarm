@@ -39,7 +39,7 @@ class MyAlarmSetWorker(
             Log.d("MyAlarmSetWorker", "Alarm set in clock app at $hour:$minute.")
 
             // Also schedule exact alarm in the app as fallback
-            AlarmHelper.scheduleSingleAlarm(applicationContext, alarmTitle, eventTimeMillis, alarmId)
+            AlarmHelper.scheduleAlarmClockPublic(applicationContext, alarmTitle, eventTimeMillis, alarmId)
             Log.d("MyAlarmSetWorker", "App alarm scheduled at ${Date(eventTimeMillis)}.")
 
             Result.success()

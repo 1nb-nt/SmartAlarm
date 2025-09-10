@@ -1,21 +1,17 @@
 package com.example.alarmchatapp
 
 import androidx.room.TypeConverter
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import java.time.LocalTime
+import java.util.Date
 
 class Converters {
-    private val gson = Gson()
+    @TypeConverter fun fromLocalTime(value: LocalTime?): String? = value?.toString()
+    @TypeConverter fun toLocalTime(value: String?): LocalTime? = value?.let { LocalTime.parse(it) }
 
-    @TypeConverter
-    fun fromIntList(value: List<Int>?): String? {
-        return if (value == null) null else gson.toJson(value)
-    }
+    @TypeConverter fun fromTimestamp(value: Long?): Date? = value?.let { Date(it) }
+    @TypeConverter fun dateToTimestamp(date: Date?): Long? = date?.time
 
-    @TypeConverter
-    fun toIntList(value: String?): List<Int>? {
-        if (value == null) return null
-        val listType = object : TypeToken<List<Int>>() {}.type
-        return gson.fromJson(value, listType)
-    }
+    @TypeConverter fun fromIntList(list: List<Int>?): String? = list?.joinToString(",")
+    @TypeConverter fun toIntList(csv: String?): List<Int>? =
+        csv?.takeIf { it.isNotBlank() }?.split(",")?.mapNotNull { it.toIntOrNull() }
 }

@@ -36,7 +36,7 @@ class TaskExecutionWorker(appContext: Context, workerParams: WorkerParameters) :
                             if (nextExecutionTime <= task.endDate) {
                                 val updatedTask = task.copy(executionTime = nextExecutionTime)
                                 taskDao.update(updatedTask)
-                                AlarmHelper.scheduleSingleAlarm(applicationContext, task.description, nextExecutionTime, task.id)
+                                AlarmHelper.scheduleAlarmClockPublic(applicationContext, task.description, nextExecutionTime, task.id)
                                 Log.d("TaskExecutionWorker", "Ranged task '${task.description}' rescheduled.")
                             } else {
                                 taskDao.delete(task)
@@ -46,7 +46,7 @@ class TaskExecutionWorker(appContext: Context, workerParams: WorkerParameters) :
                             // Infinite recurring task
                             val updatedTask = task.copy(executionTime = nextExecutionTime)
                             taskDao.update(updatedTask)
-                            AlarmHelper.scheduleSingleAlarm(applicationContext, task.description, nextExecutionTime, task.id)
+                            AlarmHelper.scheduleAlarmClockPublic(applicationContext, task.description, nextExecutionTime, task.id)
                             Log.d("TaskExecutionWorker", "Infinite recurring task '${task.description}' rescheduled.")
                         }
                     } else {

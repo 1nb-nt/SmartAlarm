@@ -1,31 +1,37 @@
 package com.example.alarmchatapp
 
 import android.content.Context
-
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
-@Database(entities = [Alarm::class, ScheduledTask::class], version = 2)
-@TypeConverters(Converters::class)
-
+@Database(
+    entities = [
+        ScheduledTask::class,   // keep if this entity exists in the project
+        Alarm::class
+    ],
+    version = 3,
+    exportSchema = false
+)
+@TypeConverters(Converters::class) // register all converters for the DB scope
 abstract class AppDatabase : RoomDatabase() {
-    abstract fun alarmDao(): AlarmDao
     abstract fun scheduledTaskDao(): ScheduledTaskDao
+    abstract fun alarmDao(): AlarmDao
 
     companion object {
-        @Volatile
-        private var INSTANCE: AppDatabase? = null
+        @Volatile private var INSTANCE: AppDatabase? = null
 
-        fun getDatabase(context: Context): AppDatabase {
-            return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "alarm_database")
+        fun getDatabase(context: Context): AppDatabase =
+            INSTANCE ?: synchronized(this) {
+                Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "app_database"
+                )
                     .fallbackToDestructiveMigration()
                     .build()
-                INSTANCE = instance
-                instance
+                    .also { INSTANCE = it }
             }
-        }
     }
 }
