@@ -42,6 +42,9 @@ import kotlinx.coroutines.launch
 import java.util.Calendar
 import java.util.Locale
 import com.example.alarmchatapp.R
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 
 @Composable
@@ -157,16 +160,27 @@ fun InputSection(
 
             scope.launch {
                 try {
-                    // 1) Build backend payload
+                    // 1) Build backend payload (augmented user_input with device date & timezone)
+                    val zone = ZoneId.systemDefault() // e.g., Asia/Kolkata
+                    val todayDmy = LocalDate.now(zone).format(DateTimeFormatter.ofPattern("dd-MM-yyyy")) // e.g., 11-09-2025
+                    val ianaId = zone.id // "Asia/Kolkata"
+// Compose the augmented prompt text exactly as requested
+                    val augmentedUserInput = buildString {
+                        append(rawText)
+                        append(" ")
+                        append("Today's date is $todayDmy and the timezone is IST ($ianaId)")
+                    }
+
                     val payload: Map<String, Any> = mapOf(
                         "objective" to "Alarm Generator",
                         "objective_key" to "alarm_generator",
                         "model" to "openai",
                         "inputs" to mapOf(
-                            "user_input" to rawText,
+                            "user_input" to augmentedUserInput,
                             "ctype" to "text"
                         )
-                    ) // [11][6]
+                    )
+
 
                     // 2) Call and read raw JSON string
                     val http = RetrofitClient.instance.getAlarmDetailsRaw(payload)
