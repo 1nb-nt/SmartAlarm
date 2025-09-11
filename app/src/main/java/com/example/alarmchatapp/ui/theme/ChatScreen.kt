@@ -74,6 +74,12 @@ fun ChatScreen(onShow: () -> Unit) {
         }
         permissionLauncher.launch(permissions.toTypedArray())
     }
+    LaunchedEffect(Unit) {
+        com.example.alarmchatapp.utils.FsiHelper.ensureFsiEnabled(context)
+        com.example.alarmchatapp.utils.ExactAlarmHelper.ensureExactAlarmAllowed(context)
+
+    }
+
 
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
@@ -351,12 +357,20 @@ fun InputSection(
                         ).toInt()
                         AlarmHelper.scheduleWeeklyAlarms(context, title, hour, minute, daysFromText, id)
                         scheduledCount = daysFromText.size
-                    } else if (recStr == "daily") {
+                    } else if (recStr == "daily"||txt.contains("every day")) {
                         val first = futureTimes.first()
                         val cal = Calendar.getInstance().apply { timeInMillis = first }
                         val hour = cal.get(Calendar.HOUR_OF_DAY)
                         val minute = cal.get(Calendar.MINUTE)
-                        val allDays = (Calendar.SUNDAY..Calendar.SATURDAY).toList()
+                        val allDays = listOf(
+                            Calendar.SUNDAY,
+                            Calendar.MONDAY,
+                            Calendar.TUESDAY,
+                            Calendar.WEDNESDAY,
+                            Calendar.THURSDAY,
+                            Calendar.FRIDAY,
+                            Calendar.SATURDAY
+                        ).toList()
                         val id = dao.insert(
                             Alarm(message = title, triggerTimeMillis = first, isRecurring = true, recurringDays = allDays)
                         ).toInt()
@@ -396,7 +410,8 @@ private fun extractDays(text: String): List<Int>? {
         )
         lowered.contains("weekends") -> listOf(Calendar.SATURDAY, Calendar.SUNDAY)
         lowered.contains("everyday") || lowered.contains("daily") ->
-            (Calendar.SUNDAY..Calendar.SATURDAY).toList()
+            listOf(Calendar.SUNDAY, Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY)
+                .toList()
         else -> {
             val map = mapOf(
                 "sunday" to Calendar.SUNDAY, "monday" to Calendar.MONDAY, "tuesday" to Calendar.TUESDAY,

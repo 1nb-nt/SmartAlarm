@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="com.example.alarmchatapp">
 
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
@@ -39,11 +40,13 @@
             android:name=".AlarmActivity"
             android:exported="false"
             android:showWhenLocked="true"
+            android:showOnLockScreen="true"
             android:turnScreenOn="true"
             android:excludeFromRecents="true"
-            android:launchMode="singleTask"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
             android:theme="@style/Theme.AlarmChatApp"
-            android:screenOrientation="portrait"/>
+            android:screenOrientation="fullSensor" />
 
         <receiver
             android:name=".AlarmReceiver"

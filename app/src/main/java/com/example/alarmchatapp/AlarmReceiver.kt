@@ -7,17 +7,15 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.NotificationChannel
 import android.app.Notification
-import android.graphics.Color
 import androidx.core.app.NotificationCompat
 import android.os.Build
 import kotlinx.coroutines.launch
 import java.util.Collections
 
-// AlarmReceiver.kt
 class AlarmReceiver : BroadcastReceiver() {
 
     companion object {
-        private val firedIds =  Collections.synchronizedSet(mutableSetOf<Int>())
+        private val firedIds = Collections.synchronizedSet(mutableSetOf<Int>())
         const val ACTION_DISMISS = "com.example.alarmchatapp.ACTION_DISMISS"
     }
 
@@ -26,15 +24,23 @@ class AlarmReceiver : BroadcastReceiver() {
         val id = intent.getIntExtra("ALARM_ID", 0)
 
         // Idempotency: if already fired, do nothing
-        if (!firedIds.add(id)) return  // already handled once [2]
+        if (!firedIds.add(id)) return
 
         val nm = context.getSystemService(NotificationManager::class.java)
-        val channelId = "alarm_clock_fsi_v2" // new ID if importance changed
+        val channelId = "alarm_clock_fsi_v2" // keep stable; bump to a new ID only if you must recreate at HIGH
 
+        // Channel: must be HIGH for heads-up/FSI
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (nm.getNotificationChannel(channelId) == null) {
-                val ch = NotificationChannel(channelId, "Alarm (Full Screen)", NotificationManager.IMPORTANCE_HIGH)
-                ch.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            val existing = nm.getNotificationChannel(channelId)
+            if (existing == null) {
+                val ch = NotificationChannel(
+                    channelId,
+                    "Alarm (Full Screen)",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                    description = "Ringing alarms"
+                }
                 nm.createNotificationChannel(ch)
             }
         }
@@ -45,40 +51,58 @@ class AlarmReceiver : BroadcastReceiver() {
             putExtra("alarm_message", message)
             putExtra("alarm_id", id)
         }
-        val fullPi = PendingIntent.getActivity(context, id, full, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val fullPi = PendingIntent.getActivity(
+            context, id, full, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
-        // Dismiss action
-        val dismiss = Intent(context, DismissReceiver::class.java).apply {
-            action = ACTION_DISMISS
-            putExtra("ALARM_ID", id)
-        }
-        val dismissPi = PendingIntent.getBroadcast(context, id, dismiss, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val canFsi = if (Build.VERSION.SDK_INT >= 34) {
+            nm.canUseFullScreenIntent()
+        } else true
 
         val notif = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle("Alarm")
             .setContentText(message)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setFullScreenIntent(fullPi, true)    // lockscreen full-screen; heads-up when unlocked [2][1]
-            .setOnlyAlertOnce(true)               // don’t alert again on updates [1]
-            .setOngoing(true)                     // persistent until dismissed
-            .addAction(0, "Dismiss", dismissPi)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .apply {
+                // Launch full-screen when allowed (Android 14+ policy)
+                if (canFsi) {
+                    setFullScreenIntent(fullPi, true) // lockscreen full-screen; heads-up when unlocked
+                }
+                // Always provide a content intent so a heads-up tap opens AlarmActivity
+                setContentIntent(fullPi)
+                // Optional fallback haptics if FSI is denied (uncomment if desired)
+                // setVibrate(longArrayOf(0, 700, 300, 700))
+            }
             .build()
 
         nm.notify("alarm", id, notif)
 
-        // Optional: mark one-shot alarms as consumed in DB to avoid re-scheduling
+        // One-time alarm cleanup: delete from DB and cancel PendingIntent
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            val dao = AppDatabase.getDatabase(context).alarmDao()
-            val rec = dao.getById(id)
-            if (rec != null && !rec.isRecurring) {
-                // mark consumed flag or delete, depending on your schema
-                // dao.delete(rec)
-            }
+            try {
+                val dao = AppDatabase.getDatabase(context).alarmDao()
+                val rec = dao.getById(id)
+                if (rec != null && !rec.isRecurring) {
+                    // Remove DB row
+                    dao.delete(rec)
+
+                    // Cancel any matching PendingIntent, just in case
+                    val am = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                    val cancelIntent = Intent(context, AlarmReceiver::class.java)
+                    val cancelPi = android.app.PendingIntent.getBroadcast(
+                        context,
+                        id,
+                        cancelIntent,
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                    )
+                    am.cancel(cancelPi) // Safe even if not scheduled anymore
+                }
+            } catch (_: Exception) { }
         }
     }
 }
-
-
