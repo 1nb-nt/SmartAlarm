@@ -15,10 +15,15 @@ import java.util.Date
 
 object AlarmHelper {
 
+    // Schedules a user-visible exact alarm with AlarmClockInfo
     fun scheduleAlarmClockPublic(context: Context, label: String, triggerAt: Long, alarmId: Int) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
-            Toast.makeText(context, "Allow exact alarms in settings to schedule.", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                context,
+                "Allow exact alarms in settings to schedule.",
+                Toast.LENGTH_LONG
+            ).show()
             try {
                 context.startActivity(
                     Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
@@ -26,7 +31,8 @@ object AlarmHelper {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                 )
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
             return
         }
 
@@ -42,37 +48,41 @@ object AlarmHelper {
         val show = Intent(context, AlarmActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("alarm_message", label)
+            putExtra("ALARM_ID", alarmId)
         }
         val showPi = PendingIntent.getActivity(
             context, alarmId, show,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // setAlarmClock is exact and behaves properly under Doze for user alarms
         val info = AlarmManager.AlarmClockInfo(triggerAt, showPi)
         am.setAlarmClock(info, op)
-
-        Toast.makeText(context, "Alarm scheduled: $label at ${Date(triggerAt)}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Alarm scheduled: $label at ${Date(triggerAt)}", Toast.LENGTH_SHORT)
+            .show()
     }
 
-    fun scheduleSingleAlarm(context: Context, label: String, triggerAtMillis: Long, requestCode: Int) {
+    // Keep single-shot wrapper
+    fun scheduleSingleAlarm(
+        context: Context,
+        label: String,
+        triggerAtMillis: Long,
+        requestCode: Int
+    ) {
         scheduleAlarmClockPublic(context, label, triggerAtMillis, requestCode)
     }
 
-    fun scheduleWeeklyAlarms(
-        context: Context,
-        label: String,
-        hour: Int,
-        minute: Int,
-        selectedDays: List<Int>,
-        baseAlarmId: Int
-    ) {
-        selectedDays.forEachIndexed { index, dow ->
-            val t = getNextAlarmTimeForDay(hour, minute, dow)
-            val id = baseAlarmId * 10 + index
-            scheduleAlarmClockPublic(context, "$label (${getDayNameByCalendar(dow)})", t, id)
+    // Compute the NEXT occurrence among provided weekdays (Calendar.SUNDAY..SATURDAY) at hour:minute.
+    fun computeNextAmongDays(hour: Int, minute: Int, days: List<Int>): Long {
+        var best: Long? = null
+        for (dow in days) {
+            val candidate = getNextAlarmTimeForDay(hour, minute, dow)
+            if (best == null || candidate < best) best = candidate
         }
+        return best!!
     }
 
+    // Compute the next time for a specific weekday at hour:minute.
     fun getNextAlarmTimeForDay(hour: Int, minute: Int, dayOfWeek: Int): Long {
         val cal = Calendar.getInstance().apply {
             set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)

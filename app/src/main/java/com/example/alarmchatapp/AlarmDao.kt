@@ -21,4 +21,9 @@ interface AlarmDao {
 
     @Delete
     suspend fun delete(alarm: Alarm)
+
+    // NEW: used by the worker to fetch alarms due now or earlier
+    @Query("SELECT * FROM alarms WHERE triggerTimeMillis <= :now ORDER BY triggerTimeMillis ASC")
+    suspend fun getDue(now: Long): List<Alarm>
+
 }

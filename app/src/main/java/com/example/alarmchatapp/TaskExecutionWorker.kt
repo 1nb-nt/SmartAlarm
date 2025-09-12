@@ -5,63 +5,73 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.alarmchatapp.utils.AlarmHelper
-import java.util.*
-import java.util.concurrent.TimeUnit
+import java.util.Calendar
 
 class TaskExecutionWorker(appContext: Context, workerParams: WorkerParameters) :
     CoroutineWorker(appContext, workerParams) {
 
-    override suspend fun doWork(): Result {
-        Log.d("TaskExecutionWorker", "Worker starting: checking due tasks.")
 
+    override suspend fun doWork(): Result {
+        Log.d("TaskExecutionWorker", "Worker starting: checking due alarms.")
         return try {
             val db = AppDatabase.getDatabase(applicationContext)
-            val taskDao = db.scheduledTaskDao()
+            val alarmDao = db.alarmDao()
             val now = System.currentTimeMillis()
-            val dueTasks = taskDao.getTasksDue(now)
 
-            if (dueTasks.isEmpty()) {
-                Log.d("TaskExecutionWorker", "No tasks are due.")
+            // Requires AlarmDao.getDue(now)
+            val dueAlarms = alarmDao.getDue(now)
+            if (dueAlarms.isEmpty()) {
+                Log.d("TaskExecutionWorker", "No alarms are due.")
                 return Result.success()
             }
 
-            dueTasks.forEach { task ->
+            dueAlarms.forEach { alarm ->
                 try {
-                    Log.d("TaskExecutionWorker", "Processing task: ${task.description}")
+                    if (alarm.isRecurring) {
+                        val firedCal = Calendar.getInstance().apply { timeInMillis = alarm.triggerTimeMillis }
+                        val hour = firedCal.get(Calendar.HOUR_OF_DAY)
+                        val minute = firedCal.get(Calendar.MINUTE)
 
-                    if (task.isRecurring) {
-                        val nextExecutionTime = task.executionTime + TimeUnit.DAYS.toMillis(1)
-                        if (task.endDate != null) {
-                            // Ranged recurring task with end date
-                            if (nextExecutionTime <= task.endDate) {
-                                val updatedTask = task.copy(executionTime = nextExecutionTime)
-                                taskDao.update(updatedTask)
-                                AlarmHelper.scheduleAlarmClockPublic(applicationContext, task.description, nextExecutionTime, task.id)
-                                Log.d("TaskExecutionWorker", "Ranged task '${task.description}' rescheduled.")
-                            } else {
-                                taskDao.delete(task)
-                                Log.d("TaskExecutionWorker", "Ranged task '${task.description}' completed and deleted.")
+                        val next: Long = when {
+                            alarm.recurringDays?.size == 7 -> {
+                                Calendar.getInstance().apply {
+                                    set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+                                    set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
+                                    add(Calendar.DAY_OF_YEAR, 1)
+                                }.timeInMillis
                             }
-                        } else {
-                            // Infinite recurring task
-                            val updatedTask = task.copy(executionTime = nextExecutionTime)
-                            taskDao.update(updatedTask)
-                            AlarmHelper.scheduleAlarmClockPublic(applicationContext, task.description, nextExecutionTime, task.id)
-                            Log.d("TaskExecutionWorker", "Infinite recurring task '${task.description}' rescheduled.")
+                            !alarm.recurringDays.isNullOrEmpty() -> {
+                                AlarmHelper.computeNextAmongDays(hour, minute, alarm.recurringDays!!)
+                            }
+                            else -> {
+                                // No rule persisted; fallback to next day same time
+                                Calendar.getInstance().apply {
+                                    set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+                                    set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
+                                    add(Calendar.DAY_OF_YEAR, 1)
+                                }.timeInMillis
+                            }
                         }
+
+                        val updated = alarm.copy(triggerTimeMillis = next)
+                        alarmDao.update(updated) // suspend within coroutine
+                        AlarmHelper.scheduleAlarmClockPublic(applicationContext, alarm.message, next, alarm.id)
+                        Log.d("TaskExecutionWorker", "Recurring alarm '${alarm.message}' rescheduled to $next.")
                     } else {
-                        // One-time task
-                        taskDao.delete(task)
-                        Log.d("TaskExecutionWorker", "One-time task '${task.description}' deleted after execution.")
+                        // One-time: cleanup after firing
+                        alarmDao.delete(alarm)
+                        Log.d("TaskExecutionWorker", "One-time alarm '${alarm.message}' deleted after execution.")
                     }
-                } catch (ex: Exception) {
-                    Log.e("TaskExecutionWorker", "Failed processing task id ${task.id}", ex)
+                } catch (e: Exception) {
+                    Log.e("TaskExecutionWorker", "Failed alarm id=${alarm.id}", e)
                 }
             }
+
             Result.success()
-        } catch (ex: Exception) {
-            Log.e("TaskExecutionWorker", "Worker failed", ex)
+        } catch (e: Exception) {
+            Log.e("TaskExecutionWorker", "Worker failed", e)
             Result.failure()
         }
     }
+
 }

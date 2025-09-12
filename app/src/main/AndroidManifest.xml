@@ -36,17 +36,7 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".AlarmActivity"
-            android:exported="false"
-            android:showWhenLocked="true"
-            android:showOnLockScreen="true"
-            android:turnScreenOn="true"
-            android:excludeFromRecents="true"
-            android:launchMode="singleInstance"
-            android:taskAffinity=""
-            android:theme="@style/Theme.AlarmChatApp"
-            android:screenOrientation="fullSensor" />
+        <activity android:name=".AlarmActivity" android:exported="false" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:launchMode="singleInstance" android:taskAffinity="" android:theme="@style/Theme.AlarmChatApp" android:screenOrientation="fullSensor" />
 
         <receiver
             android:name=".AlarmReceiver"
