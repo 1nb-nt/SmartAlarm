@@ -19,7 +19,9 @@ data class AlarmContract(
     val timezone: String? = "Asia/Kolkata",
     val recurrence: Any? = "once",  // String or List<String>
     val ex_days: List<String> = emptyList(),
-    val notification: List<String> = emptyList()
+    val notification: List<String> = emptyList(),
+    val response: String? = null,
+    val initial_note: String? = null
 )
 
 object AlarmParser {
@@ -51,7 +53,10 @@ object AlarmParser {
                 notification = when (val n = rawMap["notification"]) {
                     is List<*> -> n.filterIsInstance<String>()
                     else -> emptyList()
-                }
+                },
+                response = rawMap["response"] as? String,
+                initial_note = rawMap["initial_note"] as? String
+
             )
         } catch (e: Exception) {
             println("Error parsing JSON: ${e.message}")
@@ -89,7 +94,9 @@ object AlarmParser {
 
         val fixedAlarm = alarm.copy(
             distance = normalizeDistance(alarm.distance),
-            notification = fixedNotifications.map { it.toString() }
+            notification = fixedNotifications.map { it.toString() },
+            response = alarm.response,
+            initial_note = alarm.initial_note
         )
         return fixedAlarm to (if (issues.isEmpty()) listOf("✅ Alarm is valid") else issues)
     }

@@ -16,7 +16,7 @@ import java.util.Date
 object AlarmHelper {
 
     // Schedules a user-visible exact alarm with AlarmClockInfo
-    fun scheduleAlarmClockPublic(context: Context, label: String, triggerAt: Long, alarmId: Int) {
+    fun scheduleAlarmClockPublic(context: Context, label: String, triggerAt: Long, alarmId: Int,initialNote: String? = null) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
             Toast.makeText(
@@ -39,6 +39,7 @@ object AlarmHelper {
         val fire = Intent(context, AlarmReceiver::class.java).apply {
             putExtra("ALARM_LABEL", label)
             putExtra("ALARM_ID", alarmId)
+            putExtra("INITIAL_NOTE", initialNote)
         }
         val op = PendingIntent.getBroadcast(
             context, alarmId, fire,
@@ -49,6 +50,7 @@ object AlarmHelper {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("alarm_message", label)
             putExtra("ALARM_ID", alarmId)
+            putExtra("INITIAL_NOTE", initialNote)
         }
         val showPi = PendingIntent.getActivity(
             context, alarmId, show,

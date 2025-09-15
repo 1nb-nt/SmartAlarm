@@ -1,19 +1,28 @@
 package com.example.alarmchatapp
 
-import android.content.Intent
-import android.media.*
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.Ringtone
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -26,7 +35,7 @@ class AlarmActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Show on lock screen and turn screen on
+        // Full-screen over lock screen and while in use
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -38,16 +47,16 @@ class AlarmActivity : ComponentActivity() {
                         WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
                         WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
             )
-        } // [1]
+        }
 
+        // Extras
         val message = intent.getStringExtra("alarm_message") ?: "Alarm"
+        val initialNote = intent.getStringExtra("INITIAL_NOTE").orEmpty()
 
-        // Prepare audio
+        // Prepare audio focus and ringtone
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
-
         val alarmTone: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-
         ringtone = RingtoneManager.getRingtone(applicationContext, alarmTone)?.apply {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 isLooping = true
@@ -59,39 +68,37 @@ class AlarmActivity : ComponentActivity() {
             streamType = AudioManager.STREAM_ALARM
         }
 
-        // Request audio focus for alarm
+        // Request transient exclusive focus and start ringing
         requestAlarmAudioFocus()
-
-        // Start ringing
         ringtone?.play()
 
         setContent {
-            Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(30.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(text = message, color = Color.White, fontSize = 30.sp)
-                    Spacer(modifier = Modifier.height(40.dp))
-                    Button(onClick = {
-                        stopRinging()
-                        finish()
-                    }) {
-                        Text("Dismiss")
+            MaterialTheme {
+                Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(30.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(text = message, color = Color.White, fontSize = 30.sp)
+                        Spacer(Modifier.height(24.dp))
+                        if (initialNote.isNotBlank()) {
+                            AlarmNoteMarquee(note = initialNote)
+                            Spacer(Modifier.height(24.dp))
+                        }
+                        Button(onClick = {
+                            stopRinging()
+                            finish()
+                        }) {
+                            Text("Dismiss")
+                        }
                     }
                 }
             }
         }
     }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-    }
-
 
     private fun requestAlarmAudioFocus() {
         val am = audioManager ?: return
@@ -115,7 +122,7 @@ class AlarmActivity : ComponentActivity() {
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
             )
         }
-    } // [3]
+    }
 
     private fun abandonAlarmAudioFocus() {
         val am = audioManager ?: return
@@ -128,21 +135,30 @@ class AlarmActivity : ComponentActivity() {
     }
 
     private fun stopRinging() {
-        try {
-            ringtone?.stop()
-        } catch (_: Exception) { }
+        try { ringtone?.stop() } catch (_: Exception) { }
         abandonAlarmAudioFocus()
-    }
-
-    override fun onPause() {
-        super.onPause()
-        // Keep ringing even if backgrounded; do NOT stop here unless desired
-        // If you want to pause when user navigates away, uncomment:
-        // stopRinging()
     }
 
     override fun onDestroy() {
         stopRinging()
         super.onDestroy()
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AlarmNoteMarquee(note: String) {
+    Surface(tonalElevation = 6.dp, color = Color(0xFF101010), shape = MaterialTheme.shapes.medium) {
+        Text(
+            text = note,
+            color = Color.White,
+            fontSize = 20.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Visible,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 0)
+        )
     }
 }

@@ -5,6 +5,7 @@
 
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -36,32 +37,41 @@
             </intent-filter>
         </activity>
 
-        <activity android:name=".AlarmActivity" android:exported="false" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:launchMode="singleInstance" android:taskAffinity="" android:theme="@style/Theme.AlarmChatApp" android:screenOrientation="fullSensor" />
-
+        <activity
+            android:name=".AlarmActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:theme="@style/Theme.AlarmChatApp"
+            android:screenOrientation="fullSensor" />
         <receiver
             android:name=".AlarmReceiver"
             android:enabled="true"
-            android:exported="true"
-        android:permission="android.permission.WAKE_LOCK">
-        <intent-filter>
-            <action android:name="com.example.alarmchatapp.ALARM_TRIGGERED" />
-        </intent-filter>
-    </receiver>
+            android:exported="true">
+            <!-- intent-filter is optional for explicit PI; can be omitted -->
+            <intent-filter>
+                <action android:name="com.example.alarmchatapp.ALARM_TRIGGERED" />
+            </intent-filter>
+        </receiver>
 
+        <!-- FIX: Register the actual class name used in code -->
         <receiver
-            android:name=".AlarmHandlerReceiver"
+            android:name=".RescheduleReceiver"
             android:enabled="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- Optional if using device-encrypted (direct boot) data -->
+                <!-- <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" /> -->
             </intent-filter>
         </receiver>
 
         <receiver
             android:name=".DismissReceiver"
             android:exported="false" />
-
-
-
     </application>
+
 </manifest>
