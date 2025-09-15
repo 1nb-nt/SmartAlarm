@@ -1,9 +1,6 @@
 package com.example.alarmchatapp.ui
 
 import android.Manifest
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import android.content.Context
 import android.os.Build
 import android.util.Log
@@ -42,19 +39,30 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.alarmchatapp.*
-import com.example.alarmchatapp.network.AlarmParser
 import com.example.alarmchatapp.network.AlarmContract
+import com.example.alarmchatapp.network.AlarmParser
 import com.example.alarmchatapp.network.RetrofitClient
 import com.example.alarmchatapp.ui.theme.AlarmListScreen
 import com.example.alarmchatapp.utils.AlarmHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import java.util.Calendar
-import java.util.Locale
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import com.example.alarmchatapp.R
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Calendar
+import java.util.Locale
+
+// Chat roles
+enum class Sender { User, App }
+
+data class ChatMessage(
+    val text: String,
+    val sender: Sender
+)
 
 @Composable
 fun AppContent() {
@@ -69,27 +77,27 @@ fun AppContent() {
 fun ChatScreen(onShow: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val messages = remember { mutableStateListOf<String>() }
-    var input by remember { mutableStateOf(TextFieldValue()) }
-    var isProcessing by remember { mutableStateOf(false) } // UI-only flag controlling the logo spin
 
-    // Permission launcher
+    val messages = remember { mutableStateListOf<ChatMessage>() }
+    var input by remember { mutableStateOf(TextFieldValue()) }
+    var isProcessing by remember { mutableStateOf(false) }
+
+    // Permissions launcher
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {}
 
-    // Ask runtime permissions
+    // Ask only location (no notification permission needed for chat UI)
     LaunchedEffect(Unit) {
         val permissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions += Manifest.permission.POST_NOTIFICATIONS
+            // Intentionally not requesting POST_NOTIFICATIONS to keep UI minimal
         }
         permissionLauncher.launch(permissions.toTypedArray())
     }
 
-    // Ensure exact alarms + FSI
+    // Exact alarm special access (kept; safe no-op if not needed)
     LaunchedEffect(Unit) {
-        com.example.alarmchatapp.utils.FsiHelper.ensureFsiEnabled(context)
         com.example.alarmchatapp.utils.ExactAlarmHelper.ensureExactAlarmAllowed(context)
     }
 
@@ -99,25 +107,17 @@ fun ChatScreen(onShow: () -> Unit) {
             .background(MaterialTheme.colorScheme.background),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // TopBar + Manage button
         TopBar(onShow)
-
-        // Keep your spacing choices
         Spacer(Modifier.height(50.dp))
 
-        // WOW logo + buttons (logo gets spinning hands overlay when processing)
         OldUiButtons(
             onCommandClick = { commandText -> input = TextFieldValue(commandText) },
             isProcessing = isProcessing
         )
 
-        // Chat message list
         MessageList(messages)
-
-        // Keep your spacing choices
         Spacer(Modifier.height(200.dp))
 
-        // Input text field
         InputSection(
             input = input,
             onInputChange = { input = it },
@@ -127,7 +127,7 @@ fun ChatScreen(onShow: () -> Unit) {
             modifier = Modifier
                 .navigationBarsPadding()
                 .padding(bottom = 8.dp),
-            onProcessingChange = { isProcessing = it } // start/stop spinner without changing logic
+            onProcessingChange = { isProcessing = it }
         )
     }
 }
@@ -140,14 +140,12 @@ fun OldUiButtons(onCommandClick: (String) -> Unit, isProcessing: Boolean) {
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // WOW logo with rotating hands overlay
         WowLogoWithSpinner(
             isProcessing = isProcessing,
             logoSize = 200.dp,
-            clockOverlaySize = 112.dp // tweak if the hands look too big/small
+            clockOverlaySize = 112.dp
         )
         Spacer(Modifier.height(24.dp))
-
         Row(
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.fillMaxWidth()
@@ -155,15 +153,12 @@ fun OldUiButtons(onCommandClick: (String) -> Unit, isProcessing: Boolean) {
             Button(
                 onClick = { onCommandClick("Set an alarm at 6 PM") },
                 modifier = Modifier.weight(1f)
-            ) {
-                Text("Wake Up")
-            }
+            ) { Text("Wake Up") }
+
             Button(
                 onClick = { onCommandClick("Remind me at 9 PM daily") },
                 modifier = Modifier.weight(1f)
-            ) {
-                Text("Remind Me")
-            }
+            ) { Text("Remind Me") }
         }
     }
 }
@@ -180,12 +175,12 @@ private fun WowLogoWithSpinner(
             contentDescription = "Wow Logo",
             modifier = Modifier.size(logoSize)
         )
-        RotatingClockOverlay(isProcessing = isProcessing, sizeDp = clockOverlaySize) // CHANGED ARG NAME
+        RotatingClockOverlay(isProcessing = isProcessing, sizeDp = clockOverlaySize)
     }
 }
 
 @Composable
-private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) { // CHANGED PARAM NAME
+private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) {
     val infinite = rememberInfiniteTransition(label = "clock-spin")
     val angle by infinite.animateFloat(
         initialValue = 0f,
@@ -193,18 +188,14 @@ private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) { // CHANGED
         animationSpec = infiniteRepeatable(animation = tween(durationMillis = 1600, easing = LinearEasing)),
         label = "angle"
     )
-
-
     if (!isProcessing) return
-
     Canvas(
         modifier = Modifier
-            .size(sizeDp) // use the Dp only for the modifier
+            .size(sizeDp)
             .graphicsLayer { rotationZ = angle }
     ) {
-        val c = this.center // draw scope center in px
-        val r = this.size.minDimension / 2f // draw scope size (px), NOT the Dp param
-
+        val c = this.center
+        val r = this.size.minDimension / 2f
         drawLine(
             color = Color(0xFF6A1B9A),
             start = c,
@@ -247,24 +238,49 @@ fun TopBar(onShow: () -> Unit) {
     }
 }
 
+// Right/Left chat list
 @Composable
-fun MessageList(messages: List<String>) {
+fun MessageList(messages: List<ChatMessage>) {
     LazyColumn(
         Modifier
             .fillMaxWidth()
-            .heightIn(max = 180.dp)
-            .padding(12.dp),
+            .heightIn(max = 280.dp) // a bit taller for richer chat
+            .padding(horizontal = 12.dp),
         reverseLayout = true
     ) {
-        items(messages) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                tonalElevation = 4.dp,
-                modifier = Modifier.padding(vertical = 4.dp)
+        items(messages) { msg ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = if (msg.sender == Sender.User) Arrangement.End else Arrangement.Start
             ) {
-                Text(it, Modifier.padding(12.dp))
+                MessageBubble(text = msg.text, isUser = msg.sender == Sender.User)
             }
         }
+    }
+}
+
+@Composable
+private fun MessageBubble(text: String, isUser: Boolean) {
+    val bg = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+    val fg = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+    val shape = if (isUser) {
+        RoundedCornerShape(topStart = 16.dp, topEnd = 12.dp, bottomEnd = 4.dp, bottomStart = 16.dp)
+    } else {
+        RoundedCornerShape(topStart = 12.dp, topEnd = 16.dp, bottomEnd = 16.dp, bottomStart = 4.dp)
+    }
+    Surface(
+        color = bg,
+        shape = shape,
+        tonalElevation = 2.dp,
+        shadowElevation = 2.dp
+    ) {
+        Text(
+            text = text,
+            color = fg,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        )
     }
 }
 
@@ -274,9 +290,9 @@ fun InputSection(
     onInputChange: (TextFieldValue) -> Unit,
     scope: CoroutineScope,
     context: Context,
-    messages: MutableList<String>,
+    messages: MutableList<ChatMessage>,
     modifier: Modifier = Modifier,
-    onProcessingChange: (Boolean) -> Unit = {} // UI-only hook to start/stop the spinner
+    onProcessingChange: (Boolean) -> Unit = {}
 ) {
     Row(
         modifier
@@ -295,12 +311,16 @@ fun InputSection(
         IconButton(onClick = {
             val rawText = input.text.trim()
             if (rawText.isEmpty()) return@IconButton
-            onInputChange(TextFieldValue(""))
 
+            // Immediately show the user's message on the right
+            messages.add(0, ChatMessage(rawText, Sender.User))
+
+            onInputChange(TextFieldValue(""))
             scope.launch {
                 try {
-                    onProcessingChange(true) // START UI spinner
-                    // ------- EXISTING WORK (unchanged) -------
+                    onProcessingChange(true)
+
+                    // Build augmented user input for backend
                     val zone = ZoneId.systemDefault()
                     val todayDmy = LocalDate.now(zone).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
                     val ianaId = zone.id
@@ -318,18 +338,19 @@ fun InputSection(
 
                     val http = RetrofitClient.instance.getAlarmDetailsRaw(payload)
                     if (!http.isSuccessful) {
-                        messages.add(0, "API failed: ${http.code()}")
+                        messages.add(0, ChatMessage("API failed: ${http.code()}", Sender.App))
                         return@launch
                     }
+
                     val bodyStr = http.body()?.string().orEmpty()
                     if (bodyStr.isBlank()) {
-                        messages.add(0, "API failed: empty body")
+                        messages.add(0, ChatMessage("API failed: empty body", Sender.App))
                         return@launch
                     }
 
                     val innerJson = extractInnerJsonFromResponse(bodyStr)
                     if (innerJson == null) {
-                        messages.add(0, "API returned no JSON block; nothing scheduled.")
+                        messages.add(0, ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
                         return@launch
                     }
 
@@ -348,6 +369,7 @@ fun InputSection(
                         isoList = listOf(fixed.datetime!!)
                     }
 
+                    // If only time is given
                     if (isoList.isEmpty() && !fixed.time.isNullOrBlank()) {
                         val parts = fixed.time.split(":")
                         val hour = parts.getOrNull(0)?.toIntOrNull()
@@ -367,6 +389,7 @@ fun InputSection(
                         }
                     }
 
+                    // Try parse from free text date (dd/mm/yyyy ... hh:mm am/pm)
                     if (isoList.isEmpty()) {
                         val lower = rawText.lowercase(Locale.getDefault()).replace("on", " ")
                         val dateTimeRegex = Regex(
@@ -381,17 +404,14 @@ fun InputSection(
                             val hStr = m.groupValues.getOrNull(4).orEmpty()
                             val minStr = m.groupValues.getOrNull(5).orEmpty().ifBlank { "0" }
                             val ampm = m.groupValues.getOrNull(6)?.lowercase(Locale.getDefault())
-
                             val h = hStr.toIntOrNull()
                             val min = minStr.toIntOrNull()
-
                             if (d != null && mo != null && y != null && h != null && min != null &&
                                 d in 1..31 && mo in 1..12 && h in 0..23 && min in 0..59
                             ) {
                                 var hour24 = h
                                 if (ampm == "pm" && h in 1..11) hour24 = h + 12
                                 if (ampm == "am" && h == 12) hour24 = 0
-
                                 val cal = Calendar.getInstance().apply {
                                     set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
                                     set(Calendar.YEAR, y); set(Calendar.MONTH, mo - 1); set(Calendar.DAY_OF_MONTH, d)
@@ -405,6 +425,7 @@ fun InputSection(
                         }
                     }
 
+                    // Try parse from time only
                     if (isoList.isEmpty()) {
                         val lower = rawText.lowercase(Locale.getDefault())
                         val timeRegex = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE)
@@ -433,18 +454,21 @@ fun InputSection(
                         }
                     }
 
+                    // Convert to future epoch millis
                     val nowMs = System.currentTimeMillis()
                     val futureTimes = isoList.mapNotNull {
                         runCatching { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull()
                     }.filter { it > nowMs }.distinct().sorted()
+
                     if (futureTimes.isEmpty()) {
-                        messages.add(0, "No future times after validation; nothing scheduled.")
+                        messages.add(0, ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
                         return@launch
                     }
 
                     val txt = rawText.lowercase(Locale.getDefault())
                     val daysFromText: List<Int>? = extractDays(txt)
                     val recStr = (fixed.recurrence as? String)?.lowercase() ?: "once"
+
                     val dao = AppDatabase.getDatabase(context).alarmDao()
                     var scheduledCount = 0
 
@@ -457,8 +481,12 @@ fun InputSection(
                         val id = dao.insert(
                             Alarm(message = title, triggerTimeMillis = next, isRecurring = true, recurringDays = daysFromText)
                         ).toInt()
-                        AlarmHelper.scheduleAlarmClockPublic(context, title, next, id,initialNote)
+
+                        // If your project has scheduleExactOneShot, prefer it; otherwise keep scheduleAlarmClockPublic.
+                        // AlarmHelper.scheduleExactOneShot(context, title, next, id, initialNote)
+                        AlarmHelper.scheduleAlarmClockPublic(context, title, next, id, initialNote)
                         scheduledCount = 1
+
                     } else if (recStr == "daily" || txt.contains("every day")) {
                         val first = futureTimes.first()
                         val cal = Calendar.getInstance().apply { timeInMillis = first }
@@ -477,28 +505,28 @@ fun InputSection(
                         val id = dao.insert(
                             Alarm(message = title, triggerTimeMillis = next, isRecurring = true, recurringDays = allDays)
                         ).toInt()
-                        AlarmHelper.scheduleAlarmClockPublic(context, title, next, id,initialNote)
+                        // AlarmHelper.scheduleExactOneShot(context, title, next, id, initialNote)
+                        AlarmHelper.scheduleAlarmClockPublic(context, title, next, id, initialNote)
                         scheduledCount = 1
+
                     } else {
                         for (t in futureTimes) {
                             val id = dao.insert(
                                 Alarm(message = title, triggerTimeMillis = t, isRecurring = false, recurringDays = null)
                             ).toInt()
-                            AlarmHelper.scheduleAlarmClockPublic(context, title, t, id,initialNote)
+                            // AlarmHelper.scheduleExactOneShot(context, title, t, id, initialNote)
+                            AlarmHelper.scheduleAlarmClockPublic(context, title, t, id, initialNote)
                             scheduledCount++
                         }
                     }
 
-                    messages.add(0, "Scheduled $scheduledCount alarm(s) for '$title'.")
-                    // NEW: show the model’s friendly confirmation after alarms are assigned
-                    assistantMessage?.let { messages.add(0, it) }
+                    assistantMessage?.let { messages.add(0, ChatMessage(it, Sender.App)) }
 
-                    // ------- EXISTING WORK END -------
                 } catch (e: Exception) {
                     Log.e("ChatScreen", "Error", e)
-                    messages.add(0, "Failed: ${e.localizedMessage ?: "Unknown error"}")
+                    messages.add(0, ChatMessage("Failed: ${e.localizedMessage ?: "Unknown error"}", Sender.App))
                 } finally {
-                    onProcessingChange(false) // STOP UI spinner
+                    onProcessingChange(false)
                 }
             }
         }) {
@@ -507,7 +535,8 @@ fun InputSection(
     }
 }
 
-// Helpers (unchanged)
+// Helpers
+
 private fun extractDays(text: String): List<Int>? {
     val lowered = text.lowercase(Locale.getDefault())
     return when {
@@ -516,7 +545,10 @@ private fun extractDays(text: String): List<Int>? {
         )
         lowered.contains("weekends") -> listOf(Calendar.SATURDAY, Calendar.SUNDAY)
         lowered.contains("everyday") || lowered.contains("daily") ->
-            listOf(Calendar.SUNDAY, Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY)
+            listOf(
+                Calendar.SUNDAY, Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
+                Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY
+            )
         else -> {
             val map = mapOf(
                 "sunday" to Calendar.SUNDAY, "monday" to Calendar.MONDAY, "tuesday" to Calendar.TUESDAY,
@@ -525,18 +557,16 @@ private fun extractDays(text: String): List<Int>? {
             )
             val match = map.entries.firstOrNull {
                 lowered.contains("every ${it.key}") || lowered.contains(it.key)
-            }
-            match?.let { listOf(it.value) }
+            } ?: return null
+            listOf(match.value)
         }
     }
 }
 
 private fun extractInnerJsonFromResponse(raw: String): String? {
     val jsonObj = runCatching {
-        Json { ignoreUnknownKeys = true }
-            .parseToJsonElement(raw).jsonObject
+        Json { ignoreUnknownKeys = true }.parseToJsonElement(raw).jsonObject
     }.getOrNull() ?: return null
-
     val resp = jsonObj["response"]?.jsonPrimitive?.content ?: return null
     val text = resp.replace("``````", "")
     val start = text.indexOf('{')
