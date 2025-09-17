@@ -5,17 +5,14 @@
 
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
-    <uses-permission android:name="android.permission.INTERNET" />
-
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <queries>
         <!-- For launching Google Maps via Intent -->
         <package android:name="com.google.android.apps.maps" />
@@ -43,19 +40,14 @@
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:excludeFromRecents="true"
-            android:launchMode="singleInstance"
+            android:launchMode="singleTop"
             android:taskAffinity=""
             android:theme="@style/Theme.AlarmChatApp"
             android:screenOrientation="fullSensor" />
         <receiver
             android:name=".AlarmReceiver"
             android:enabled="true"
-            android:exported="true">
-            <!-- intent-filter is optional for explicit PI; can be omitted -->
-            <intent-filter>
-                <action android:name="com.example.alarmchatapp.ALARM_TRIGGERED" />
-            </intent-filter>
-        </receiver>
+            android:exported="false" />
 
         <!-- FIX: Register the actual class name used in code -->
         <receiver

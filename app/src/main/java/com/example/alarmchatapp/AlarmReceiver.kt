@@ -25,6 +25,7 @@ class AlarmReceiver : BroadcastReceiver() {
         val id = intent.getIntExtra("ALARM_ID", 0)
         val label = intent.getStringExtra("ALARM_LABEL") ?: "Alarm"
         val note = intent.getStringExtra("INITIAL_NOTE")
+
         if (id == 0) {
             Log.w("AlarmReceiver", "Missing ALARM_ID")
             return
@@ -50,6 +51,7 @@ class AlarmReceiver : BroadcastReceiver() {
             Log.e("AlarmReceiver", "Failed to start AlarmActivity", e)
         }
 
+        NotificationHelper.showAlarmNotification(context, id, label, note)
         // Reschedule or clean up asynchronously (unchanged)
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {

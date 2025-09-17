@@ -7,5 +7,5 @@ import retrofit2.http.POST
 
 interface ApiService {
     @POST("generate")
-    suspend fun getAlarmDetailsRaw(@Body payload: Map<String, @JvmSuppressWildcards Any>):Response<okhttp3.ResponseBody>
+    suspend fun getAlarmDetailsRaw(@Body payload: Map<String, @JvmSuppressWildcards Any>):Response<ResponseBody>
 }

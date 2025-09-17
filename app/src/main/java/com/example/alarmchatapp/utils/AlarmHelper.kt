@@ -15,15 +15,17 @@ import java.util.Date
 
 object AlarmHelper {
 
-    // Schedules a user-visible exact alarm with AlarmClockInfo
-    fun scheduleAlarmClockPublic(context: Context, label: String, triggerAt: Long, alarmId: Int,initialNote: String? = null) {
+    // User-visible exact alarm using setAlarmClock (wakes under Doze)
+    fun scheduleAlarmClockPublic(
+        context: Context,
+        label: String,
+        triggerAt: Long,
+        alarmId: Int,
+        initialNote: String? = null
+    ) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
-            Toast.makeText(
-                context,
-                "Allow exact alarms in settings to schedule.",
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(context, "Allow exact alarms in settings to schedule.", Toast.LENGTH_LONG).show()
             try {
                 context.startActivity(
                     Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
@@ -31,60 +33,77 @@ object AlarmHelper {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                 )
-            } catch (_: Exception) {
-            }
+            } catch (_: Exception) { }
             return
         }
 
-        val fire = Intent(context, AlarmReceiver::class.java).apply {
-            putExtra("ALARM_LABEL", label)
-            putExtra("ALARM_ID", alarmId)
-            putExtra("INITIAL_NOTE", initialNote)
-        }
-        val op = PendingIntent.getBroadcast(
-            context, alarmId, fire,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
 
         val show = Intent(context, AlarmActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+
             putExtra("alarm_message", label)
             putExtra("ALARM_ID", alarmId)
             putExtra("INITIAL_NOTE", initialNote)
         }
         val showPi = PendingIntent.getActivity(
-            context, alarmId, show,
+            context, 0, Intent(context, AlarmActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("alarm_message", label)
+                putExtra("ALARM_ID", alarmId)
+                putExtra("INITIAL_NOTE", initialNote)
+            },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val fire = Intent(context, AlarmReceiver::class.java).apply {
+            putExtra("ALARM_LABEL", label)
+            putExtra("ALARM_ID", alarmId)
+            putExtra("INITIAL_NOTE", initialNote)
+        }
 
-        // setAlarmClock is exact and behaves properly under Doze for user alarms
+        val op = PendingIntent.getBroadcast(
+            context, alarmId, Intent(context, AlarmReceiver::class.java).apply {
+                putExtra("ALARM_LABEL", label)
+                putExtra("ALARM_ID", alarmId)
+                putExtra("INITIAL_NOTE", initialNote)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val info = AlarmManager.AlarmClockInfo(triggerAt, showPi)
         am.setAlarmClock(info, op)
-        Toast.makeText(context, "Alarm scheduled: $label at ${Date(triggerAt)}", Toast.LENGTH_SHORT)
-            .show()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            am.setExactAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerAt,
+                showPi // 🚀 Launch directly in full screen
+            )
+        } else {
+            am.setExact(
+                AlarmManager.RTC_WAKEUP,
+                triggerAt,
+                showPi
+            )
+        }
+
+        Toast.makeText(context, "Alarm scheduled: $label at ${Date(triggerAt)}", Toast.LENGTH_SHORT).show()
     }
 
-    // Keep single-shot wrapper
     fun scheduleSingleAlarm(
         context: Context,
         label: String,
         triggerAtMillis: Long,
         requestCode: Int
-    ) {
-        scheduleAlarmClockPublic(context, label, triggerAtMillis, requestCode)
-    }
+    ) = scheduleAlarmClockPublic(context, label, triggerAtMillis, requestCode)
 
-    // Compute the NEXT occurrence among provided weekdays (Calendar.SUNDAY..SATURDAY) at hour:minute.
+    // Next among provided weekdays at hour:minute (Calendar.* constants)
     fun computeNextAmongDays(hour: Int, minute: Int, days: List<Int>): Long {
         var best: Long? = null
         for (dow in days) {
             val candidate = getNextAlarmTimeForDay(hour, minute, dow)
             if (best == null || candidate < best) best = candidate
         }
-        return best!!
+        return requireNotNull(best)
     }
 
-    // Compute the next time for a specific weekday at hour:minute.
     fun getNextAlarmTimeForDay(hour: Int, minute: Int, dayOfWeek: Int): Long {
         val cal = Calendar.getInstance().apply {
             set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
@@ -93,17 +112,6 @@ object AlarmHelper {
         }
         if (cal.before(Calendar.getInstance())) cal.add(Calendar.WEEK_OF_YEAR, 1)
         return cal.timeInMillis
-    }
-
-    fun getDayNameByCalendar(day: Int) = when (day) {
-        Calendar.SUNDAY -> "Sunday"
-        Calendar.MONDAY -> "Monday"
-        Calendar.TUESDAY -> "Tuesday"
-        Calendar.WEDNESDAY -> "Wednesday"
-        Calendar.THURSDAY -> "Thursday"
-        Calendar.FRIDAY -> "Friday"
-        Calendar.SATURDAY -> "Saturday"
-        else -> "Unknown"
     }
 
     fun cancelScheduledAlarm(context: Context, alarmId: Int) {

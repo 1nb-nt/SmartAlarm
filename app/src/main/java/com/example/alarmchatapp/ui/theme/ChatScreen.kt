@@ -1,6 +1,8 @@
 package com.example.alarmchatapp.ui
 
 import android.Manifest
+import android.app.AlarmManager
+import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
 import android.util.Log
@@ -44,6 +46,8 @@ import com.example.alarmchatapp.network.AlarmParser
 import com.example.alarmchatapp.network.RetrofitClient
 import com.example.alarmchatapp.ui.theme.AlarmListScreen
 import com.example.alarmchatapp.utils.AlarmHelper
+import com.example.alarmchatapp.utils.ExactAlarmHelper
+import com.example.alarmchatapp.utils.FsiHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -85,20 +89,25 @@ fun ChatScreen(onShow: () -> Unit) {
     // Permissions launcher
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) {}
+    ) { /* result ignored for brevity */ }
 
-    // Ask only location (no notification permission needed for chat UI)
+    // Request location + notifications (optional) for alarm notification on 33+
     LaunchedEffect(Unit) {
         val permissions = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Intentionally not requesting POST_NOTIFICATIONS to keep UI minimal
+            permissions += Manifest.permission.POST_NOTIFICATIONS
         }
         permissionLauncher.launch(permissions.toTypedArray())
     }
 
-    // Exact alarm special access (kept; safe no-op if not needed)
+    // Exact alarm special access (Android 12+) – deep link if missing
     LaunchedEffect(Unit) {
-        com.example.alarmchatapp.utils.ExactAlarmHelper.ensureExactAlarmAllowed(context)
+        ExactAlarmHelper.ensureExactAlarmAllowed(context)
+    }
+
+    // Full-screen intent special access (Android 14+)
+    LaunchedEffect(Unit) {
+        FsiHelper.ensureFsiEnabled(context)
     }
 
     Column(
@@ -112,8 +121,24 @@ fun ChatScreen(onShow: () -> Unit) {
 
         OldUiButtons(
             onCommandClick = { commandText -> input = TextFieldValue(commandText) },
-            isProcessing = isProcessing
+            isProcessing = isProcessing,
+            onTest = {
+                // Quick sanity check: ring in 5 seconds via setAlarmClock
+                val trigger = System.currentTimeMillis() + 5_000L
+                val testId = 999_001
+                AlarmHelper.scheduleAlarmClockPublic(
+                    context = context,
+                    label = "Test alarm in 5s",
+                    triggerAt = trigger,
+                    alarmId = testId,
+                    initialNote = "This is a test alarm"
+                )
+                Toast.makeText(context, "Scheduled test alarm in 5 seconds", Toast.LENGTH_SHORT).show()
+            }
         )
+
+        // Readiness bar: surfaces 3 gates (exact-alarm, notifications 13+, full-screen 14+)
+        AlarmReadinessBar()
 
         MessageList(messages)
         Spacer(Modifier.height(200.dp))
@@ -133,7 +158,11 @@ fun ChatScreen(onShow: () -> Unit) {
 }
 
 @Composable
-fun OldUiButtons(onCommandClick: (String) -> Unit, isProcessing: Boolean) {
+fun OldUiButtons(
+    onCommandClick: (String) -> Unit,
+    isProcessing: Boolean,
+    onTest: () -> Unit
+) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -160,6 +189,11 @@ fun OldUiButtons(onCommandClick: (String) -> Unit, isProcessing: Boolean) {
                 modifier = Modifier.weight(1f)
             ) { Text("Remind Me") }
         }
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = onTest,
+            enabled = !isProcessing
+        ) { Text("Test in 5s") }
     }
 }
 
@@ -238,13 +272,12 @@ fun TopBar(onShow: () -> Unit) {
     }
 }
 
-// Right/Left chat list
 @Composable
 fun MessageList(messages: List<ChatMessage>) {
     LazyColumn(
         Modifier
             .fillMaxWidth()
-            .heightIn(max = 280.dp) // a bit taller for richer chat
+            .heightIn(max = 280.dp)
             .padding(horizontal = 12.dp),
         reverseLayout = true
     ) {
@@ -312,15 +345,24 @@ fun InputSection(
             val rawText = input.text.trim()
             if (rawText.isEmpty()) return@IconButton
 
-            // Immediately show the user's message on the right
             messages.add(0, ChatMessage(rawText, Sender.User))
-
             onInputChange(TextFieldValue(""))
+
             scope.launch {
                 try {
                     onProcessingChange(true)
 
-                    // Build augmented user input for backend
+                    // Exact-alarm preflight: bail out if revoked on Android 12+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val am = context.getSystemService(AlarmManager::class.java)
+                        if (!am.canScheduleExactAlarms()) {
+                            ExactAlarmHelper.ensureExactAlarmAllowed(context)
+                            messages.add(0, ChatMessage("Exact alarm permission required; please grant and retry.", Sender.App))
+                            return@launch
+                        }
+                    }
+
+                    // Build augmented user input for backend (unchanged)
                     val zone = ZoneId.systemDefault()
                     val todayDmy = LocalDate.now(zone).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
                     val ianaId = zone.id
@@ -369,7 +411,6 @@ fun InputSection(
                         isoList = listOf(fixed.datetime!!)
                     }
 
-                    // If only time is given
                     if (isoList.isEmpty() && !fixed.time.isNullOrBlank()) {
                         val parts = fixed.time.split(":")
                         val hour = parts.getOrNull(0)?.toIntOrNull()
@@ -389,7 +430,6 @@ fun InputSection(
                         }
                     }
 
-                    // Try parse from free text date (dd/mm/yyyy ... hh:mm am/pm)
                     if (isoList.isEmpty()) {
                         val lower = rawText.lowercase(Locale.getDefault()).replace("on", " ")
                         val dateTimeRegex = Regex(
@@ -425,7 +465,6 @@ fun InputSection(
                         }
                     }
 
-                    // Try parse from time only
                     if (isoList.isEmpty()) {
                         val lower = rawText.lowercase(Locale.getDefault())
                         val timeRegex = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE)
@@ -454,7 +493,6 @@ fun InputSection(
                         }
                     }
 
-                    // Convert to future epoch millis
                     val nowMs = System.currentTimeMillis()
                     val futureTimes = isoList.mapNotNull {
                         runCatching { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull()
@@ -477,13 +515,10 @@ fun InputSection(
                         val cal = Calendar.getInstance().apply { timeInMillis = first }
                         val hour = cal.get(Calendar.HOUR_OF_DAY)
                         val minute = cal.get(Calendar.MINUTE)
-                        val next = com.example.alarmchatapp.utils.AlarmHelper.computeNextAmongDays(hour, minute, daysFromText)
+                        val next = AlarmHelper.computeNextAmongDays(hour, minute, daysFromText)
                         val id = dao.insert(
                             Alarm(message = title, triggerTimeMillis = next, isRecurring = true, recurringDays = daysFromText)
                         ).toInt()
-
-                        // If your project has scheduleExactOneShot, prefer it; otherwise keep scheduleAlarmClockPublic.
-                        // AlarmHelper.scheduleExactOneShot(context, title, next, id, initialNote)
                         AlarmHelper.scheduleAlarmClockPublic(context, title, next, id, initialNote)
                         scheduledCount = 1
 
@@ -505,7 +540,6 @@ fun InputSection(
                         val id = dao.insert(
                             Alarm(message = title, triggerTimeMillis = next, isRecurring = true, recurringDays = allDays)
                         ).toInt()
-                        // AlarmHelper.scheduleExactOneShot(context, title, next, id, initialNote)
                         AlarmHelper.scheduleAlarmClockPublic(context, title, next, id, initialNote)
                         scheduledCount = 1
 
@@ -514,7 +548,6 @@ fun InputSection(
                             val id = dao.insert(
                                 Alarm(message = title, triggerTimeMillis = t, isRecurring = false, recurringDays = null)
                             ).toInt()
-                            // AlarmHelper.scheduleExactOneShot(context, title, t, id, initialNote)
                             AlarmHelper.scheduleAlarmClockPublic(context, title, t, id, initialNote)
                             scheduledCount++
                         }
@@ -531,6 +564,53 @@ fun InputSection(
             }
         }) {
             Icon(imageVector = Icons.Filled.Send, contentDescription = "Send")
+        }
+    }
+}
+
+// Readiness bar: exact-alarm (12+), notifications (13+), full-screen (14+)
+@Composable
+private fun AlarmReadinessBar() {
+    val ctx = LocalContext.current
+    var exactOk by remember { mutableStateOf(true) }
+    var notifOk by remember { mutableStateOf(true) }
+    var fsiOk by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val am = ctx.getSystemService(AlarmManager::class.java)
+            exactOk = am.canScheduleExactAlarms()
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            val granted = androidx.core.app.ActivityCompat.checkSelfPermission(
+                ctx, Manifest.permission.POST_NOTIFICATIONS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            notifOk = granted
+        }
+        if (Build.VERSION.SDK_INT >= 34) {
+            val nm = ctx.getSystemService(NotificationManager::class.java)
+            fsiOk = nm.canUseFullScreenIntent()
+        }
+    }
+
+    Surface(tonalElevation = 2.dp, modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 16.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text("Alarm readiness", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(6.dp))
+            Text("Exact alarms: ${if (exactOk) "OK" else "Needs enable"}")
+            Text("Notifications (Android 13+): ${if (notifOk) "OK" else "Grant"}")
+            Text("Full-screen (Android 14+): ${if (fsiOk) "OK" else "Enable"}")
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { ExactAlarmHelper.ensureExactAlarmAllowed(ctx) }) {
+                    Text("Fix exact alarm")
+                }
+                Button(onClick = { FsiHelper.ensureFsiEnabled(ctx) }) {
+                    Text("Fix full-screen")
+                }
+            }
         }
     }
 }
