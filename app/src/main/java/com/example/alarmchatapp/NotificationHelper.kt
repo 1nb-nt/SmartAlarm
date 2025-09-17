@@ -1,64 +1,85 @@
 package com.example.alarmchatapp
 
-import android.Manifest
-import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
-import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
+import com.example.alarmchatapp.AlarmActivity
+import com.example.alarmchatapp.DismissReceiver
+import com.example.alarmchatapp.R
 
 object NotificationHelper {
+
     private const val CHANNEL_ID = "alarm_channel"
 
-    fun showAlarmNotification(context: Context, id: Int, title: String, note: String?) {
-        // Full-screen intent to AlarmActivity
-        val fullscreenIntent = Intent(context, AlarmActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("alarm_message", title)
-            putExtra("ALARM_ID", id)
-            putExtra("INITIAL_NOTE", note)
+    fun showAlarmNotification(context: Context, alarmId: Int, message: String, note: String?) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Create channel if needed
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Alarm Notifications",
+                NotificationManager.IMPORTANCE_HIGH // must be HIGH
+            ).apply {
+                description = "Shows full-screen alarms"
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                setSound(
+                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+            }
+            nm.createNotificationChannel(channel)
         }
-        val fsi = PendingIntent.getActivity(
-            context, id, fullscreenIntent,
+
+        // Full-screen intent -> AlarmActivity
+        val fullScreenIntent = Intent(context, AlarmActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("ALARM_ID", alarmId)
+            putExtra("alarm_message", message)
+            putExtra("INITIAL_NOTE", note ?: "")
+        }
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context, alarmId, fullScreenIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Optional dismiss action (wire to a BroadcastReceiver if desired)
-        val dismissIntent = PendingIntent.getBroadcast(
-            context, id,
-            Intent(context, DismissReceiver::class.java).putExtra("ALARM_ID", id),
+        // Dismiss action
+        val dismissIntent = Intent(context, DismissReceiver::class.java).apply {
+            putExtra("ALARM_ID", alarmId)
+        }
+        val dismissPi = PendingIntent.getBroadcast(
+            context, alarmId, dismissIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notif = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm) // built-in icon
-            .setContentTitle(title)
-            .setContentText(note ?: "Alarm")
-            .setCategory(Notification.CATEGORY_ALARM)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+        // Build notification
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("⏰ Alarm")
+            .setContentText(message)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Dismiss", dismissIntent)
-            .setFullScreenIntent(fsi, true) // request full-screen
-            .build()
+            .setFullScreenIntent(fullScreenPendingIntent, true) // critical!
+            .addAction(R.drawable.ic_launcher_foreground, "Dismiss", dismissPi)
 
-        // Android 13+ runtime permission check
-        if (Build.VERSION.SDK_INT >= 33) {
-            val granted = ActivityCompat.checkSelfPermission(
-                context, Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                // Don't crash: skip notify if permission missing (request it from an Activity elsewhere)
-                return
-            }
-        }
+        nm.notify(alarmId, builder.build())
+    }
 
-        NotificationManagerCompat.from(context).notify(id, notif)
+    fun cancelAlarmNotification(context: Context, alarmId: Int) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(alarmId)
     }
 }

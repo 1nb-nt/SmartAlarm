@@ -5,7 +5,6 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.util.Log
 import com.example.alarmchatapp.utils.AlarmHelper
 import kotlinx.coroutines.CoroutineScope
@@ -15,7 +14,6 @@ import java.util.Calendar
 import java.util.Collections
 
 class AlarmReceiver : BroadcastReceiver() {
-
 
     companion object {
         private val firedIds = Collections.synchronizedSet(mutableSetOf<Int>())
@@ -34,20 +32,11 @@ class AlarmReceiver : BroadcastReceiver() {
             return
         }
 
-        // Start the alarm screen directly in full-screen
-        val full = Intent(context, AlarmActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("alarm_message", label)
-            putExtra("ALARM_ID", id)
-            putExtra("INITIAL_NOTE", note)
-        }
+        // ✅ Do not start activity directly, rely on NotificationHelper full-screen intent
         try {
-            context.startActivity(full) // launch UI without any notification[1]
             NotificationHelper.showAlarmNotification(context, id, label, note)
         } catch (e: Exception) {
-            Log.e("AlarmReceiver", "Failed to start AlarmActivity", e)
+            Log.e("AlarmReceiver", "Failed to show full-screen alarm notification", e)
         }
 
         // Reschedule or clean up asynchronously (unchanged)
@@ -75,7 +64,6 @@ class AlarmReceiver : BroadcastReceiver() {
                     }
                     if (nextTrigger != null) {
                         dao.update(alarm.copy(triggerTimeMillis = nextTrigger))
-                        // pass the same note to next occurrence
                         AlarmHelper.scheduleAlarmClockPublic(
                             context = context,
                             label = alarm.message,
@@ -83,7 +71,6 @@ class AlarmReceiver : BroadcastReceiver() {
                             alarmId = alarm.id,
                             initialNote = note
                         )
-
                     } else {
                         dao.delete(alarm)
                     }

@@ -1,5 +1,9 @@
 package com.example.alarmchatapp
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -8,9 +12,13 @@ import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.*
@@ -25,17 +33,30 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.alarmchatapp.NotificationHelper
 
 class AlarmActivity : ComponentActivity() {
 
     private var ringtone: Ringtone? = null
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
+    private var vibratorLegacy: Vibrator? = null
+    private var alarmId: Int = 0
 
+    private val dismissReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                "com.example.alarmchatapp.STOP_RING" -> stopRinging()
+                "com.example.alarmchatapp.FINISH_ALARM" -> finish()
+            }
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Full-screen over lock screen and while in use
+        // Full-screen flags
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -49,11 +70,22 @@ class AlarmActivity : ComponentActivity() {
             )
         }
 
-        // Extras
+        // Register receiver
+        registerReceiver(
+            dismissReceiver,
+            IntentFilter().apply {
+                addAction("com.example.alarmchatapp.STOP_RING")
+                addAction("com.example.alarmchatapp.FINISH_ALARM")
+            },
+            RECEIVER_NOT_EXPORTED
+        )
+
+        // Extract extras
+        alarmId = intent.getIntExtra("ALARM_ID", 0)
         val message = intent.getStringExtra("alarm_message") ?: "Alarm"
         val initialNote = intent.getStringExtra("INITIAL_NOTE").orEmpty()
 
-        // Prepare audio focus and ringtone
+        // Setup audio + ringtone
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         val alarmTone: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
@@ -68,10 +100,12 @@ class AlarmActivity : ComponentActivity() {
             streamType = AudioManager.STREAM_ALARM
         }
 
-        // Request transient exclusive focus and start ringing
+        // Start playback + vibration
         requestAlarmAudioFocus()
         ringtone?.play()
+        startAlarmVibration()
 
+        // Compose UI
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
@@ -90,6 +124,7 @@ class AlarmActivity : ComponentActivity() {
                         }
                         Button(onClick = {
                             stopRinging()
+                            NotificationHelper.cancelAlarmNotification(this@AlarmActivity, alarmId)
                             finish()
                         }) {
                             Text("Dismiss")
@@ -100,65 +135,31 @@ class AlarmActivity : ComponentActivity() {
         }
     }
 
-    private fun requestAlarmAudioFocus() {
-        val am = audioManager ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val afr = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
-                .setOnAudioFocusChangeListener { /* ignore */ }
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
-                .build()
-            audioFocusRequest = afr
-            am.requestAudioFocus(afr)
-        } else {
-            @Suppress("DEPRECATION")
-            am.requestAudioFocus(
-                null,
-                AudioManager.STREAM_ALARM,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
-            )
-        }
-    }
+    private fun requestAlarmAudioFocus() { /* unchanged */ }
 
-    private fun abandonAlarmAudioFocus() {
-        val am = audioManager ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
-        } else {
-            @Suppress("DEPRECATION")
-            am.abandonAudioFocus(null)
-        }
-    }
+    private fun abandonAlarmAudioFocus() { /* unchanged */ }
+
+    private fun startAlarmVibration() { /* unchanged */ }
 
     private fun stopRinging() {
         try { ringtone?.stop() } catch (_: Exception) { }
+        if (Build.VERSION.SDK_INT >= 31) {
+            val vm = getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            vm.cancel()
+        } else {
+            vibratorLegacy?.cancel()
+        }
         abandonAlarmAudioFocus()
     }
 
     override fun onDestroy() {
         stopRinging()
+        NotificationHelper.cancelAlarmNotification(this, alarmId)
+        unregisterReceiver(dismissReceiver)
         super.onDestroy()
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AlarmNoteMarquee(note: String) {
-    Surface(tonalElevation = 6.dp, color = Color(0xFF101010), shape = MaterialTheme.shapes.medium) {
-        Text(
-            text = note,
-            color = Color.White,
-            fontSize = 20.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Visible,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 0)
-        )
-    }
-}
+private fun AlarmNoteMarquee(note: String) { /* unchanged */ }

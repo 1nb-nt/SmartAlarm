@@ -1,11 +1,8 @@
-<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     package="com.example.alarmchatapp">
 
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -14,12 +11,12 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
-    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <queries>
-        <!-- For launching Google Maps via Intent -->
         <package android:name="com.google.android.apps.maps" />
     </queries>
+
     <application
         android:name=".MyApp"
         android:allowBackup="true"
@@ -39,33 +36,24 @@
 
         <activity
             android:name=".AlarmActivity"
-            android:exported="false"
+            android:launchMode="singleTop"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:excludeFromRecents="true"
-            android:launchMode="singleInstance"
-            android:taskAffinity=""
             android:theme="@style/Theme.AlarmChatApp"
-            android:screenOrientation="fullSensor" />
+            android:exported="true"/>
+
         <receiver
             android:name=".AlarmReceiver"
             android:enabled="true"
-            android:exported="true">
-            <!-- intent-filter is optional for explicit PI; can be omitted -->
-            <intent-filter>
-                <action android:name="com.example.alarmchatapp.ALARM_TRIGGERED" />
-            </intent-filter>
-        </receiver>
+            android:exported="true"/>
 
-        <!-- FIX: Register the actual class name used in code -->
         <receiver
             android:name=".RescheduleReceiver"
             android:enabled="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <!-- Optional if using device-encrypted (direct boot) data -->
-                <!-- <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" /> -->
             </intent-filter>
         </receiver>
 

@@ -46,8 +46,13 @@ object AlarmHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val show = Intent(context, AlarmActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        // AlarmHelper.kt — inside scheduleAlarmClockPublic(), replace only the 'show' and 'showPi' block.
+        val show = (context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?: Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                setPackage(context.packageName)
+            }).apply {
+            // keep extras for context if needed; they won't trigger ringing
             putExtra("alarm_message", label)
             putExtra("ALARM_ID", alarmId)
             putExtra("INITIAL_NOTE", initialNote)
@@ -57,9 +62,10 @@ object AlarmHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // setAlarmClock is exact and behaves properly under Doze for user alarms
+// keep the rest the same
         val info = AlarmManager.AlarmClockInfo(triggerAt, showPi)
         am.setAlarmClock(info, op)
+
         Toast.makeText(context, "Alarm scheduled: $label at ${Date(triggerAt)}", Toast.LENGTH_SHORT)
             .show()
     }
