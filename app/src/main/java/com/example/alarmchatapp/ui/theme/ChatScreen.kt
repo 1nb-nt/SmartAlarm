@@ -50,6 +50,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import com.example.alarmchatapp.R
+import com.example.alarmchatapp.utils.SystemAlarmScheduler
+import com.example.alarmchatapp.workers.DailyClockHydratorWorker
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -67,11 +69,30 @@ data class ChatMessage(
 @Composable
 fun AppContent() {
     val navController = rememberNavController()
+    val ctx = LocalContext.current
+
+    // Startup: schedule daily hydrator and immediate catch-up once
+    LaunchedEffect(ctx) {
+        com.example.alarmchatapp.workers.DailyClockHydratorWorker.scheduleDailyHydrator(ctx)
+        com.example.alarmchatapp.workers.DailyClockHydratorWorker.scheduleCatchUp(ctx)
+    }
+
+    // DEBUG tools — remove later
+    Row(Modifier.fillMaxWidth().padding(8.dp)) {
+        Button(onClick = {
+            com.example.alarmchatapp.workers.DailyClockHydratorWorker.scheduleCatchUp(ctx)
+            com.example.alarmchatapp.utils.SystemAlarmScheduler.showAlarms(ctx)
+        }) {
+            Text("Hydrate now (debug)")
+        }
+    }
+
     NavHost(navController, startDestination = "chat") {
         composable("chat") { ChatScreen(onShow = { navController.navigate("alarms") }) }
         composable("alarms") { AlarmListScreen(onBack = { navController.popBackStack() }) }
     }
 }
+
 
 @Composable
 fun ChatScreen(onShow: () -> Unit) {
@@ -96,10 +117,7 @@ fun ChatScreen(onShow: () -> Unit) {
         permissionLauncher.launch(permissions.toTypedArray())
     }
 
-    // Exact alarm special access (kept; safe no-op if not needed)
-    LaunchedEffect(Unit) {
-        com.example.alarmchatapp.utils.ExactAlarmHelper.ensureExactAlarmAllowed(context)
-    }
+    // Removed exact-alarm special access request; not needed when delegating to Clock app.
 
     Column(
         Modifier
@@ -154,6 +172,7 @@ fun OldUiButtons(onCommandClick: (String) -> Unit, isProcessing: Boolean) {
                 onClick = { onCommandClick("Set an alarm at 6 PM") },
                 modifier = Modifier.weight(1f)
             ) { Text("Wake Up") }
+
 
             Button(
                 onClick = { onCommandClick("Remind me at 9 PM daily") },
@@ -244,7 +263,7 @@ fun MessageList(messages: List<ChatMessage>) {
     LazyColumn(
         Modifier
             .fillMaxWidth()
-            .heightIn(max = 280.dp) // a bit taller for richer chat
+            .heightIn(max = 280.dp)
             .padding(horizontal = 12.dp),
         reverseLayout = true
     ) {
@@ -283,7 +302,6 @@ private fun MessageBubble(text: String, isUser: Boolean) {
         )
     }
 }
-
 @Composable
 fun InputSection(
     input: TextFieldValue,
@@ -312,36 +330,35 @@ fun InputSection(
             val rawText = input.text.trim()
             if (rawText.isEmpty()) return@IconButton
 
-            // Immediately show the user's message on the right
             messages.add(0, ChatMessage(rawText, Sender.User))
-
             onInputChange(TextFieldValue(""))
+
             scope.launch {
                 try {
                     onProcessingChange(true)
 
-                    // Build augmented user input for backend
-                    val zone = ZoneId.systemDefault()
-                    val todayDmy = LocalDate.now(zone).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
+                    // Augment query with local date/timezone for the API
+                    val zone = java.time.ZoneId.systemDefault()
+                    val todayDmy = java.time.LocalDate.now(zone)
+                        .format(java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy"))
                     val ianaId = zone.id
                     val augmentedUserInput = buildString {
                         append(rawText).append(' ')
                         append("Today's date is $todayDmy and the timezone is IST ($ianaId)")
                     }
 
+                    // Call backend
                     val payload: Map<String, Any> = mapOf(
                         "objective" to "Alarm Generator",
                         "objective_key" to "alarm_generator",
                         "model" to "openai",
                         "inputs" to mapOf("user_input" to augmentedUserInput, "ctype" to "text")
                     )
-
                     val http = RetrofitClient.instance.getAlarmDetailsRaw(payload)
                     if (!http.isSuccessful) {
                         messages.add(0, ChatMessage("API failed: ${http.code()}", Sender.App))
                         return@launch
                     }
-
                     val bodyStr = http.body()?.string().orEmpty()
                     if (bodyStr.isBlank()) {
                         messages.add(0, ChatMessage("API failed: empty body", Sender.App))
@@ -356,9 +373,9 @@ fun InputSection(
 
                     val parsed: AlarmContract = AlarmParser.parseAlarmJson(innerJson)
                     val (fixed, issues) = AlarmParser.validateAndFixAlarm(parsed)
-                    Log.d("AlarmParser", "innerJson=$innerJson")
-                    Log.d("AlarmParser", "fixed.notification=${fixed.notification}")
-                    issues.forEach { Log.d("AlarmParser", it) }
+                    android.util.Log.d("AlarmParser", "innerJson=$innerJson")
+                    android.util.Log.d("AlarmParser", "fixed.notification=${fixed.notification}")
+                    issues.forEach { android.util.Log.d("AlarmParser", it) }
 
                     val title = (fixed.title ?: "").ifBlank { "Alarm" }
                     val assistantMessage = fixed.response?.takeIf { it.isNotBlank() }
@@ -369,53 +386,53 @@ fun InputSection(
                         isoList = listOf(fixed.datetime!!)
                     }
 
-                    // If only time is given
+                    // Time-only normalization
                     if (isoList.isEmpty() && !fixed.time.isNullOrBlank()) {
                         val parts = fixed.time.split(":")
                         val hour = parts.getOrNull(0)?.toIntOrNull()
                         val minute = parts.getOrNull(1)?.toIntOrNull()
                         if (hour != null && minute != null) {
-                            val now = Calendar.getInstance()
-                            val cal = Calendar.getInstance().apply {
-                                set(Calendar.SECOND, 0)
-                                set(Calendar.MILLISECOND, 0)
-                                set(Calendar.HOUR_OF_DAY, hour)
-                                set(Calendar.MINUTE, minute)
+                            val now = java.util.Calendar.getInstance()
+                            val cal = java.util.Calendar.getInstance().apply {
+                                set(java.util.Calendar.SECOND, 0)
+                                set(java.util.Calendar.MILLISECOND, 0)
+                                set(java.util.Calendar.HOUR_OF_DAY, hour)
+                                set(java.util.Calendar.MINUTE, minute)
                             }
-                            if (cal.before(now)) cal.add(Calendar.DAY_OF_YEAR, 1)
+                            if (cal.before(now)) cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
                             val instant = java.time.Instant.ofEpochMilli(cal.timeInMillis)
                             val offset = java.time.ZoneId.systemDefault().rules.getOffset(instant)
                             isoList = listOf(java.time.OffsetDateTime.ofInstant(instant, offset).toString())
                         }
                     }
 
-                    // Try parse from free text date (dd/mm/yyyy ... hh:mm am/pm)
+                    // dd/mm/yyyy hh:mm am/pm fallback
                     if (isoList.isEmpty()) {
-                        val lower = rawText.lowercase(Locale.getDefault()).replace("on", " ")
+                        val lowerTmp = rawText.lowercase(java.util.Locale.getDefault()).replace("on", " ")
                         val dateTimeRegex = Regex(
                             """\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""",
                             RegexOption.IGNORE_CASE
                         )
-                        val m = dateTimeRegex.find(lower)
+                        val m = dateTimeRegex.find(lowerTmp)
                         if (m != null) {
                             val d = m.groupValues.getOrNull(1)?.toIntOrNull()
                             val mo = m.groupValues.getOrNull(2)?.toIntOrNull()
                             val y = m.groupValues.getOrNull(3)?.toIntOrNull()
                             val hStr = m.groupValues.getOrNull(4).orEmpty()
                             val minStr = m.groupValues.getOrNull(5).orEmpty().ifBlank { "0" }
-                            val ampm = m.groupValues.getOrNull(6)?.lowercase(Locale.getDefault())
+                            val ampm = m.groupValues.getOrNull(6)?.lowercase(java.util.Locale.getDefault())
                             val h = hStr.toIntOrNull()
-                            val min = minStr.toIntOrNull()
+                             val min = minStr.toIntOrNull()
                             if (d != null && mo != null && y != null && h != null && min != null &&
                                 d in 1..31 && mo in 1..12 && h in 0..23 && min in 0..59
                             ) {
                                 var hour24 = h
                                 if (ampm == "pm" && h in 1..11) hour24 = h + 12
                                 if (ampm == "am" && h == 12) hour24 = 0
-                                val cal = Calendar.getInstance().apply {
-                                    set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-                                    set(Calendar.YEAR, y); set(Calendar.MONTH, mo - 1); set(Calendar.DAY_OF_MONTH, d)
-                                    set(Calendar.HOUR_OF_DAY, hour24); set(Calendar.MINUTE, min)
+                                val cal = java.util.Calendar.getInstance().apply {
+                                    set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+                                    set(java.util.Calendar.YEAR, y); set(java.util.Calendar.MONTH, mo - 1); set(java.util.Calendar.DAY_OF_MONTH, d)
+                                    set(java.util.Calendar.HOUR_OF_DAY, hour24); set(java.util.Calendar.MINUTE, min)
                                 }
                                 val instant = java.time.Instant.ofEpochMilli(cal.timeInMillis)
                                 val offset = java.time.ZoneId.systemDefault().rules.getOffset(instant)
@@ -425,27 +442,30 @@ fun InputSection(
                         }
                     }
 
-                    // Try parse from time only
+                    // Time-only fallback
                     if (isoList.isEmpty()) {
-                        val lower = rawText.lowercase(Locale.getDefault())
+                        val lowerTmp = rawText.lowercase(java.util.Locale.getDefault())
                         val timeRegex = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE)
-                        val mr = timeRegex.find(lower)
+                        val mr = timeRegex.find(lowerTmp)
                         if (mr != null) {
                             val hourStr = mr.groupValues.getOrNull(1)
                             val minStr = mr.groupValues.getOrNull(2).orEmpty().ifBlank { "0" }
-                            val ampmStr = mr.groupValues.getOrNull(3)?.lowercase(Locale.getDefault())
+                            val ampmStr = mr.groupValues.getOrNull(3)?.lowercase(java.util.Locale.getDefault())
                             val h = hourStr?.toIntOrNull()
                             val min = minStr.toIntOrNull()
                             if (h != null && min != null && h in 0..23 && min in 0..59) {
                                 var hour24 = h
                                 if (ampmStr == "pm" && h in 1..11) hour24 = h + 12
                                 if (ampmStr == "am" && h == 12) hour24 = 0
-                                val now = Calendar.getInstance()
-                                val cal = Calendar.getInstance().apply {
-                                    set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-                                    set(Calendar.HOUR_OF_DAY, hour24); set(Calendar.MINUTE, min)
+                                val now = java.util.Calendar.getInstance()
+                                val cal = java.util.Calendar.getInstance().apply {
+                                    set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+                                    set(java.util.Calendar.HOUR_OF_DAY, hour24); set(java.util.Calendar.MINUTE, min)
                                 }
-                                if (cal.before(now)) cal.add(Calendar.DAY_OF_YEAR, 1)
+                                // CHANGE HERE: honor explicit "tomorrow" even if time is still ahead today
+                                val forceTomorrow = lowerTmp.contains("tomorrow")
+                                if (forceTomorrow || cal.before(now)) cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
+
                                 val instant = java.time.Instant.ofEpochMilli(cal.timeInMillis)
                                 val offset = java.time.ZoneId.systemDefault().rules.getOffset(instant)
                                 val iso = java.time.OffsetDateTime.ofInstant(instant, offset).toString()
@@ -454,76 +474,143 @@ fun InputSection(
                         }
                     }
 
-                    // Convert to future epoch millis
+                    // Convert to future epoch millis and dedupe
                     val nowMs = System.currentTimeMillis()
                     val futureTimes = isoList.mapNotNull {
                         runCatching { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull()
                     }.filter { it > nowMs }.distinct().sorted()
-
                     if (futureTimes.isEmpty()) {
                         messages.add(0, ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
                         return@launch
                     }
 
-                    val txt = rawText.lowercase(Locale.getDefault())
-                    val daysFromText: List<Int>? = extractDays(txt)
-                    val recStr = (fixed.recurrence as? String)?.lowercase() ?: "once"
+                    // Weekly parsing
+                    val weekly = parseWeeklyIntent(rawText)
 
                     val dao = AppDatabase.getDatabase(context).alarmDao()
                     var scheduledCount = 0
 
-                    if (!daysFromText.isNullOrEmpty()) {
-                        val first = futureTimes.first()
-                        val cal = Calendar.getInstance().apply { timeInMillis = first }
-                        val hour = cal.get(Calendar.HOUR_OF_DAY)
-                        val minute = cal.get(Calendar.MINUTE)
-                        val next = com.example.alarmchatapp.utils.AlarmHelper.computeNextAmongDays(hour, minute, daysFromText)
-                        val id = dao.insert(
-                            Alarm(message = title, triggerTimeMillis = next, isRecurring = true, recurringDays = daysFromText)
-                        ).toInt()
+                    // Intent predicates for important meeting
+                    val lower = rawText.lowercase(java.util.Locale.getDefault())
+                    val hasExplicitDate = Regex("""\d{1,2}[/-]\d{1,2}[/-]\d{2,4}""").containsMatchIn(lower)
+                    val weekdayWords = listOf("sunday","monday","tuesday","wednesday","thursday","friday","saturday","sun","mon","tue","tues","wed","thu","thur","thurs","fri","sat")
+                    val mentionsWeekday = weekdayWords.any { w ->
+                        lower.contains("important meeting on $w") ||
+                                lower.contains("important on $w") ||
+                                lower.contains("meeting on $w")
+                    }
 
-                        // If your project has scheduleExactOneShot, prefer it; otherwise keep scheduleAlarmClockPublic.
-                        // AlarmHelper.scheduleExactOneShot(context, title, next, id, initialNote)
-                        AlarmHelper.scheduleAlarmClockPublic(context, title, next, id, initialNote)
-                        scheduledCount = 1
-
-                    } else if (recStr == "daily" || txt.contains("every day")) {
-                        val first = futureTimes.first()
-                        val cal = Calendar.getInstance().apply { timeInMillis = first }
-                        val hour = cal.get(Calendar.HOUR_OF_DAY)
-                        val minute = cal.get(Calendar.MINUTE)
-                        val candidate = Calendar.getInstance().apply {
-                            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-                            set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
-                            if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
+                    // RECURRING SERIES
+                    if (weekly.recurringDays != null && !weekly.nextWeekOnly) {
+                        val hhmmPairs = hhmmPairsFromFutureTimes(futureTimes)
+                        for ((hour, minute) in hhmmPairs) {
+                            val next = com.example.alarmchatapp.utils.AlarmHelper
+                                .computeNextAmongDays(hour, minute, weekly.recurringDays)
+                            val id = dao.insert(
+                                Alarm(
+                                    message = title,
+                                    triggerTimeMillis = next,
+                                    isRecurring = true,
+                                    recurringDays = weekly.recurringDays
+                                )
+                            ).toInt()
+                            com.example.alarmchatapp.utils.AlarmHelper.scheduleWeeklyInClock(
+                                context = context,
+                                label = title,
+                                hour = hour,
+                                minute = minute,
+                                days = weekly.recurringDays,
+                                alarmId = id,
+                                skipUi = true,
+                                showToast = false
+                            )
+                            scheduledCount++
                         }
-                        val next = candidate.timeInMillis
-                        val allDays = listOf(
-                            Calendar.SUNDAY, Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
-                            Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY
-                        )
+
+                        // NEXT WEEK ONLY (one-shot)
+                    } else if (weekly.recurringDays != null && weekly.nextWeekOnly) {
+                        val first = futureTimes.first()
+                        val hhmm = java.util.Calendar.getInstance().apply { timeInMillis = first }
+                        val hour = hhmm.get(java.util.Calendar.HOUR_OF_DAY)
+                        val minute = hhmm.get(java.util.Calendar.MINUTE)
+                        val trigger = computeNextWeekOnlyMillis(hour, minute, weekly.recurringDays.first())
                         val id = dao.insert(
-                            Alarm(message = title, triggerTimeMillis = next, isRecurring = true, recurringDays = allDays)
+                            Alarm(message = title, triggerTimeMillis = trigger, isRecurring = false, recurringDays = null)
                         ).toInt()
-                        // AlarmHelper.scheduleExactOneShot(context, title, next, id, initialNote)
-                        AlarmHelper.scheduleAlarmClockPublic(context, title, next, id, initialNote)
+                        com.example.alarmchatapp.workers.ClockPreSchedulerWorker.enqueue(
+                            context = context,
+                            label = title,
+                            triggerAt = trigger,
+                            isRecurring = false,
+                            recurringDays = null,
+                            alarmId = id
+                        )
                         scheduledCount = 1
 
+                        // IMPORTANT with explicit date: schedule via worker for all returned datetimes
+                    } else if (lower.contains("important") && hasExplicitDate) {
+                        for (t in futureTimes.take(3)) {
+                            val id = dao.insert(
+                                Alarm(message = title, triggerTimeMillis = t, isRecurring = false, recurringDays = null)
+                            ).toInt()
+                            com.example.alarmchatapp.workers.ClockPreSchedulerWorker.enqueue(
+                                context = context,
+                                label = title,
+                                triggerAt = t,
+                                isRecurring = false,
+                                recurringDays = null,
+                                alarmId = id
+                            )
+                            scheduledCount++
+                        }
+
+                        // IMPORTANT with weekday: place three alarms now in Clock
+                    } else if (lower.contains("important") && mentionsWeekday) {
+                        val enrichedTimes = buildList {
+                            addAll(futureTimes)
+                            if (size < 3 && futureTimes.isNotEmpty()) {
+                                val cal = java.util.Calendar.getInstance().apply { timeInMillis = futureTimes.first() }
+                                val hh = cal.get(java.util.Calendar.HOUR_OF_DAY)
+                                val mm = cal.get(java.util.Calendar.MINUTE)
+                                val today = java.util.Calendar.getInstance().apply {
+                                    set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+                                    set(java.util.Calendar.HOUR_OF_DAY, hh); set(java.util.Calendar.MINUTE, mm)
+                                }
+                                if (today.timeInMillis > System.currentTimeMillis()) add(today.timeInMillis)
+                                val tomorrow = (today.clone() as java.util.Calendar).apply { add(java.util.Calendar.DAY_OF_YEAR, 1) }
+                                add(tomorrow.timeInMillis)
+                            }
+                        }.distinct().sorted().take(3)
+
+                        val placed = com.example.alarmchatapp.utils.AlarmHelper.forcePlaceThreeOneShotsInClock(
+                            context = context,
+                            dao = dao,
+                            title = title,
+                            futureTimes = enrichedTimes
+                        )
+                        scheduledCount += placed
+
+                        // DEFAULT one-shots: store and preschedule
                     } else {
                         for (t in futureTimes) {
                             val id = dao.insert(
                                 Alarm(message = title, triggerTimeMillis = t, isRecurring = false, recurringDays = null)
                             ).toInt()
-                            // AlarmHelper.scheduleExactOneShot(context, title, t, id, initialNote)
-                            AlarmHelper.scheduleAlarmClockPublic(context, title, t, id, initialNote)
+                            com.example.alarmchatapp.workers.ClockPreSchedulerWorker.enqueue(
+                                context = context,
+                                label = title,
+                                triggerAt = t,
+                                isRecurring = false,
+                                recurringDays = null,
+                                alarmId = id
+                            )
                             scheduledCount++
                         }
                     }
 
                     assistantMessage?.let { messages.add(0, ChatMessage(it, Sender.App)) }
-
                 } catch (e: Exception) {
-                    Log.e("ChatScreen", "Error", e)
+                    android.util.Log.e("ChatScreen", "Error", e)
                     messages.add(0, ChatMessage("Failed: ${e.localizedMessage ?: "Unknown error"}", Sender.App))
                 } finally {
                     onProcessingChange(false)
@@ -563,6 +650,96 @@ private fun extractDays(text: String): List<Int>? {
     }
 }
 
+private data class WeeklyIntent(
+    val recurringDays: List<Int>?, // Calendar constants if recurring
+    val nextWeekOnly: Boolean      // true if text says "next <weekday>"
+)
+private fun parseWeeklyIntent(text: String): WeeklyIntent {
+    val t = text.lowercase(Locale.getDefault())
+
+    if (t.contains("everyday") || t.contains("daily")) {
+        return WeeklyIntent(
+            listOf(Calendar.SUNDAY, Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
+                Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY),
+            nextWeekOnly = false
+        )
+    }
+    if (t.contains("weekdays")) return WeeklyIntent(
+        listOf(Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY),
+        nextWeekOnly = false
+    )
+    if (t.contains("weekends")) return WeeklyIntent(
+        listOf(Calendar.SATURDAY, Calendar.SUNDAY),
+        nextWeekOnly = false
+    )
+
+    val dayMap = mapOf(
+        "sunday" to Calendar.SUNDAY, "sun" to Calendar.SUNDAY,
+        "monday" to Calendar.MONDAY, "mon" to Calendar.MONDAY,
+        "tuesday" to Calendar.TUESDAY, "tue" to Calendar.TUESDAY, "tues" to Calendar.TUESDAY,
+        "wednesday" to Calendar.WEDNESDAY, "wed" to Calendar.WEDNESDAY,
+        "thursday" to Calendar.THURSDAY, "thu" to Calendar.THURSDAY, "thur" to Calendar.THURSDAY, "thurs" to Calendar.THURSDAY,
+        "friday" to Calendar.FRIDAY, "fri" to Calendar.FRIDAY,
+        "saturday" to Calendar.SATURDAY, "sat" to Calendar.SATURDAY
+    )
+
+    // "next monday"
+    dayMap.keys.firstOrNull { key -> t.contains("next $key") }?.let { key ->
+        return WeeklyIntent(listOf(dayMap.getValue(key)), nextWeekOnly = true)
+    }
+
+    // Proceed only if it's a recurring phrase
+    val recurringSignal = t.contains("every ") || t.contains("each ") || t.contains("weekly")
+    if (!recurringSignal) return WeeklyIntent(null, nextWeekOnly = false)
+
+    // Ranges like "mon-wed"
+    val order = listOf(Calendar.SUNDAY, Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY,
+        Calendar.THURSDAY, Calendar.FRIDAY, Calendar.SATURDAY)
+    val rangeRegex = Regex("""\b(mon|tue(?:s)?|wed|thu(?:r|rs)?|fri|sat|sun)\s*-\s*(mon|tue(?:s)?|wed|thu(?:r|rs)?|fri|sat|sun)\b""")
+    val ranged = rangeRegex.findAll(t).flatMap { m ->
+        val a = dayMap.getValue(m.groupValues[1]); val b = dayMap.getValue(m.groupValues[2])
+        val ai = order.indexOf(a); val bi = order.indexOf(b)
+        if (ai <= bi) order.subList(ai, bi + 1) else (order.subList(ai, order.size) + order.subList(0, bi + 1))
+    }.toMutableList()
+
+    // Comma/and-separated like "mon, tue and fri"
+    val listRegex = Regex("""\b(mon|tue(?:s)?|wed|thu(?:r|rs)?|fri|sat|sun)\b""")
+    val listed = listRegex.findAll(t).map { dayMap.getValue(it.value) }.toList()
+
+    val allDays = (ranged + listed).distinct()
+    if (allDays.isNotEmpty()) return WeeklyIntent(allDays, nextWeekOnly = false)
+
+    return WeeklyIntent(null, nextWeekOnly = false)
+}
+
+
+
+private fun computeNextWeekOnlyMillis(hour: Int, minute: Int, dayOfWeek: Int): Long {
+    val now = Calendar.getInstance()
+    // Find the Monday-of-this-week anchor (or the week start by locale if desired)
+    val anchor = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
+        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        // Move to start of week (Monday) then add 7 days to target next week block
+        set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+        add(Calendar.WEEK_OF_YEAR, 1)
+        // Now set target weekday inside next week
+        set(Calendar.DAY_OF_WEEK, dayOfWeek)
+    }
+    // If somehow before now due to DST, push one week
+    if (anchor.timeInMillis <= now.timeInMillis) anchor.add(Calendar.WEEK_OF_YEAR, 1)
+    return anchor.timeInMillis
+}
+// Helpers
+
+private fun hhmmPairsFromFutureTimes(futureTimes: List<Long>): List<Pair<Int, Int>> {
+    return futureTimes.map { t ->
+        Calendar.getInstance().apply { timeInMillis = t }
+    }.map { it.get(Calendar.HOUR_OF_DAY) to it.get(Calendar.MINUTE) }
+        .distinct()
+}
+
+
 private fun extractInnerJsonFromResponse(raw: String): String? {
     val jsonObj = runCatching {
         Json { ignoreUnknownKeys = true }.parseToJsonElement(raw).jsonObject
@@ -582,4 +759,5 @@ private fun extractInnerJsonFromResponse(raw: String): String? {
         }
     }
     return null
+
 }

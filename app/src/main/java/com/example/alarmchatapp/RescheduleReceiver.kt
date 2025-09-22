@@ -5,38 +5,61 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.example.alarmchatapp.utils.AlarmHelper
+import com.example.alarmchatapp.workers.ClockPreSchedulerWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.util.Calendar
 
 class RescheduleReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        val action = intent.action
-        Log.d("RescheduleReceiver", "onReceive action=$action")
+        Log.d("RescheduleReceiver", "onReceive action=${intent.action}")
 
-        // Use goAsync so the process can keep running while suspend Room calls finish.[1]
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val dao = AppDatabase.getDatabase(context).alarmDao()
-                // Use your suspend DAO
-                val alarms = dao.getAll() // suspend fun getAll(): List<Alarm>
+                val alarms = dao.getAll()
                 val now = System.currentTimeMillis()
 
                 var restored = 0
                 alarms.forEach { a ->
-                    if (a.triggerTimeMillis > now) {
-                        AlarmHelper.scheduleAlarmClockPublic(
-                            context = context,
-                            label = a.message,
-                            triggerAt = a.triggerTimeMillis,
-                            alarmId = a.id
-                        )
-                        restored++
+                    try {
+                        if (a.isRecurring && !a.recurringDays.isNullOrEmpty()) {
+                            val cal = Calendar.getInstance().apply { timeInMillis = a.triggerTimeMillis }
+                            val hour = cal.get(Calendar.HOUR_OF_DAY)
+                            val minute = cal.get(Calendar.MINUTE)
+
+                            // Weekly/daily series: recreate in Clock with id for label matching
+                            AlarmHelper.scheduleWeeklyInClock(
+                                context = context,
+                                label = a.message,
+                                hour = hour,
+                                minute = minute,
+                                days = a.recurringDays!!,
+                                alarmId = a.id,
+                                skipUi = true,
+                                showToast = false
+                            )
+                            restored++
+                        } else if (a.triggerTimeMillis > now) {
+                            // One‑shot: defer creation to a just‑in‑time worker
+                            ClockPreSchedulerWorker.enqueue(
+                                context = context,
+                                label = a.message,
+                                triggerAt = a.triggerTimeMillis,
+                                isRecurring = false,
+                                recurringDays = null,
+                                alarmId = a.id
+                            )
+                            restored++
+                        }
+                    } catch (inner: Exception) {
+                        Log.w("RescheduleReceiver", "Failed to restore alarm id=${a.id}", inner)
                     }
                 }
-                Log.d("RescheduleReceiver", "Restored $restored alarms (future ones rescheduled).")
+                Log.d("RescheduleReceiver", "Restored $restored alarms.")
             } catch (e: Exception) {
                 Log.e("RescheduleReceiver", "Failed to restore alarms", e)
             } finally {

@@ -27,41 +27,57 @@ class TaskExecutionWorker(appContext: Context, workerParams: WorkerParameters) :
 
             dueAlarms.forEach { alarm ->
                 try {
+                    // REPLACE the reschedule branch in TaskExecutionWorker.doWork()
+
                     if (alarm.isRecurring) {
                         val firedCal = Calendar.getInstance().apply { timeInMillis = alarm.triggerTimeMillis }
                         val hour = firedCal.get(Calendar.HOUR_OF_DAY)
                         val minute = firedCal.get(Calendar.MINUTE)
 
-                        val next: Long = when {
-                            alarm.recurringDays?.size == 7 -> {
-                                Calendar.getInstance().apply {
-                                    set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-                                    set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
-                                    add(Calendar.DAY_OF_YEAR, 1)
-                                }.timeInMillis
-                            }
-                            !alarm.recurringDays.isNullOrEmpty() -> {
-                                AlarmHelper.computeNextAmongDays(hour, minute, alarm.recurringDays!!)
-                            }
-                            else -> {
-                                // No rule persisted; fallback to next day same time
-                                Calendar.getInstance().apply {
-                                    set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-                                    set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
-                                    add(Calendar.DAY_OF_YEAR, 1)
-                                }.timeInMillis
-                            }
+                        if (!alarm.recurringDays.isNullOrEmpty()) {
+                            AlarmHelper.scheduleWeeklyInClock(
+                                context = applicationContext,
+                                label = alarm.message,
+                                hour = hour,
+                                minute = minute,
+                                days = alarm.recurringDays!!,
+                                alarmId = alarm.id,          // REQUIRED
+                                skipUi = true,
+                                showToast = false
+                            )
+                        } else {
+                            // Daily fallback: schedule tomorrow same time via prescheduler for safety
+                            val next = Calendar.getInstance().apply {
+                                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+                                set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
+                                add(Calendar.DAY_OF_YEAR, 1)
+                            }.timeInMillis
+                            com.example.alarmchatapp.workers.ClockPreSchedulerWorker.enqueue(
+                                context = applicationContext,
+                                label = alarm.message,
+                                triggerAt = next,
+                                isRecurring = false,
+                                recurringDays = null,
+                                alarmId = alarm.id
+                            )
                         }
 
-                        val updated = alarm.copy(triggerTimeMillis = next)
-                        alarmDao.update(updated) // suspend within coroutine
-                        AlarmHelper.scheduleAlarmClockPublic(applicationContext, alarm.message, next, alarm.id)
-                        Log.d("TaskExecutionWorker", "Recurring alarm '${alarm.message}' rescheduled to $next.")
+                        // Persist the next occurrence for UI consistency
+                        val updatedNext = AlarmHelper.computeNextAmongDays(
+                            hour = hour,
+                            minute = minute,
+                            days = alarm.recurringDays ?: emptyList()
+                        )
+                        val updated = alarm.copy(
+                            triggerTimeMillis = if (!alarm.recurringDays.isNullOrEmpty()) updatedNext else alarm.triggerTimeMillis
+                        )
+                        alarmDao.update(updated)
                     } else {
-                        // One-time: cleanup after firing
+                        // One-shot fired: clean up the row
                         alarmDao.delete(alarm)
-                        Log.d("TaskExecutionWorker", "One-time alarm '${alarm.message}' deleted after execution.")
                     }
+
+
                 } catch (e: Exception) {
                     Log.e("TaskExecutionWorker", "Failed alarm id=${alarm.id}", e)
                 }
