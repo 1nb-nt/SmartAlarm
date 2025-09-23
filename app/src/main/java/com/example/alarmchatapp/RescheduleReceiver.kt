@@ -31,7 +31,6 @@ class RescheduleReceiver : BroadcastReceiver() {
                             val hour = cal.get(Calendar.HOUR_OF_DAY)
                             val minute = cal.get(Calendar.MINUTE)
 
-                            // Weekly/daily series: recreate in Clock with id for label matching
                             AlarmHelper.scheduleWeeklyInClock(
                                 context = context,
                                 label = a.message,
@@ -44,7 +43,6 @@ class RescheduleReceiver : BroadcastReceiver() {
                             )
                             restored++
                         } else if (a.triggerTimeMillis > now) {
-                            // One‑shot: defer creation to a just‑in‑time worker
                             ClockPreSchedulerWorker.enqueue(
                                 context = context,
                                 label = a.message,
@@ -63,6 +61,7 @@ class RescheduleReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
                 Log.e("RescheduleReceiver", "Failed to restore alarms", e)
             } finally {
+                DateTimeChangeReceiver.scheduleExactMidnight(context)
                 pending.finish()
             }
         }

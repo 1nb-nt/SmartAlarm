@@ -1,37 +1,57 @@
 package com.example.alarmchatapp
 
 import android.content.Context
-import androidx.room.Database
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.room.TypeConverters
+import androidx.room.*
 
-@Database(
-    entities = [
-        ScheduledTask::class,   // keep if this entity exists in the project
-        Alarm::class
-    ],
-    version = 3,
-    exportSchema = false
+@Entity(tableName = "alarms")
+data class Alarm(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val label: String,
+    val timeMillis: Long,
+    val recurring: Boolean = false,
+    val recurringDays: List<Int>? = null,
+    val hour: Int = 0,
+    val minute: Int = 0
 )
-@TypeConverters(Converters::class) // register all converters for the DB scope
+
+@Dao
+interface AlarmDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insert(alarm: Alarm): Long
+
+    @Query("SELECT * FROM alarms ORDER BY timeMillis ASC")
+    fun getAll(): List<Alarm>
+
+    @Delete
+    fun delete(alarm: Alarm)
+}
+
+@Database(entities = [Alarm::class], version = 1)
+@TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
-    abstract fun scheduledTaskDao(): ScheduledTaskDao
     abstract fun alarmDao(): AlarmDao
 
     companion object {
-        @Volatile private var INSTANCE: AppDatabase? = null
+        @Volatile private var instance: AppDatabase? = null
 
-        fun getDatabase(context: Context): AppDatabase =
-            INSTANCE ?: synchronized(this) {
-                Room.databaseBuilder(
+        fun getDatabase(context: Context): AppDatabase {
+            return instance ?: synchronized(this) {
+                val temp = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "app_database"
-                )
-                    .fallbackToDestructiveMigration()
-                    .build()
-                    .also { INSTANCE = it }
+                    "alarm_db"
+                ).build()
+                instance = temp
+                temp
             }
+        }
     }
+}
+
+class Converters {
+    @TypeConverter
+    fun fromList(list: List<Int>?): String? = list?.joinToString(",")
+
+    @TypeConverter
+    fun toList(data: String?): List<Int>? = data?.split(",")?.map { it.toInt() }
 }

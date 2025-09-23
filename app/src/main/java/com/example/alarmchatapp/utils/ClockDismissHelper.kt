@@ -20,8 +20,10 @@ object ClockDismissHelper {
             .putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_TIME)
             .putExtra(AlarmClock.EXTRA_HOUR, hour)
             .putExtra(AlarmClock.EXTRA_MINUTES, minute)
-        if (i.resolveActivity(context.packageManager) != null) context.startActivity(i)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        launchClockIntent(context, i)
     }
+
     private fun launchClockIntent(context: Context, i: Intent) {
         val pm = context.packageManager
         if (i.resolveActivity(pm) != null) { context.startActivity(i); return }

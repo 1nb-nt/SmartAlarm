@@ -1,21 +1,20 @@
-// app/src/main/java/com/example/alarmchatapp/utils/HydratedStore.kt
 package com.example.alarmchatapp.utils
 
 import android.content.Context
 
 object HydratedStore {
-    private const val PREF = "clock_hydrated"
-    private const val KEY = "ids"
 
-    fun wasHydrated(context: Context, id: Int): Boolean {
-        val set = context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getStringSet(KEY, emptySet()) ?: emptySet()
-        return set.contains(id.toString())
+    private val hydratedToday = mutableSetOf<Int>()
+
+    fun markHydrated(alarmId: Int) {
+        hydratedToday.add(alarmId)
     }
 
-    fun markHydrated(context: Context, id: Int) {
-        val sp = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-        val set = sp.getStringSet(KEY, emptySet())?.toMutableSet() ?: mutableSetOf()
-        set.add(id.toString())
-        sp.edit().putStringSet(KEY, set).apply()
+    fun isHydrated(alarmId: Int): Boolean {
+        return hydratedToday.contains(alarmId)
+    }
+
+    fun reset() {
+        hydratedToday.clear()
     }
 }

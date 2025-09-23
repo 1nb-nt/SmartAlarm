@@ -1,131 +1,104 @@
 package com.example.alarmchatapp.network
 
-import com.fasterxml.jackson.annotation.JsonInclude
-import com.fasterxml.jackson.core.type.TypeReference
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import java.time.OffsetDateTime
-import java.time.format.DateTimeParseException
+import com.example.alarmchatapp.network.NetworkAlarm
+import java.util.Calendar
 import java.util.Locale
 
-@JsonInclude(JsonInclude.Include.NON_NULL)
-data class AlarmContract(
-    val p_type: String = "alarm",
-    val alarm_type: String? = null,
-    val title: String? = null,
-    val datetime: String? = null,   // ISO 8601
-    val time: String? = null,       // "HH:mm"
-    val location: String? = null,
-    val distance: String? = null,
-    val timezone: String? = "Asia/Kolkata",
-    val recurrence: Any? = "once",  // String or List<String>
-    val ex_days: List<String> = emptyList(),
-    val notification: List<String> = emptyList(),
-    val response: String? = null,
-    val initial_note: String? = null
-)
-
+// Optional: parser for remote/NLP commands if the server accepts chat text.
+// Here we mirror the app-side parser to build NetworkAlarm rows from free text.
 object AlarmParser {
-    private val mapper = jacksonObjectMapper()
 
-    fun parseAlarmJson(json: String): AlarmContract {
-        return try {
-            val rawMap: Map<String, Any?> =
-                mapper.readValue(json, object : TypeReference<Map<String, Any?>>() {})
-            val recurrence: Any? = rawMap["recurrence"]?.let {
-                when (it) {
-                    is String -> it
-                    is List<*> -> it.filterIsInstance<String>()
-                    else -> "once"
-                }
-            } ?: "once"
+    fun parse(text: String): List<NetworkAlarm> {
+        val lower = text.lowercase(Locale.getDefault())
+        val now = Calendar.getInstance()
 
-            AlarmContract(
-                p_type = rawMap["p_type"] as? String ?: "alarm",
-                alarm_type = (rawMap["alarm_type"] as? String) ?: (rawMap["alarm type"] as? String),
-                title = rawMap["title"] as? String,
-                datetime = rawMap["datetime"] as? String,
-                time = rawMap["time"] as? String,
-                location = rawMap["location"] as? String,
-                distance = normalizeDistance(rawMap["distance"] as? String),
-                timezone = rawMap["timezone"] as? String ?: "Asia/Kolkata",
-                recurrence = recurrence,
-                ex_days = (rawMap["ex_days"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
-                notification = when (val n = rawMap["notification"]) {
-                    is List<*> -> n.filterIsInstance<String>()
-                    else -> emptyList()
-                },
-                response = rawMap["response"] as? String,
-                initial_note = rawMap["initial_note"] as? String
-
-            )
-        } catch (e: Exception) {
-            println("Error parsing JSON: ${e.message}")
-            AlarmContract()
-        }
-    }
-
-    fun validateAndFixAlarm(alarm: AlarmContract): Pair<AlarmContract, List<String>> {
-        val issues = mutableListOf<String>()
-        var fixedNotifications: MutableList<OffsetDateTime> = mutableListOf()
-
-        val eventTime: OffsetDateTime? = alarm.datetime?.let {
-            if (isValidISO(it)) OffsetDateTime.parse(it) else {
-                issues.add("Invalid datetime format: $it")
-                null
+        // Parse time
+        var hour: Int? = null
+        var minute: Int? = null
+        val re12 = Regex("""\b(1[0-2]|0?[1-9])[:.]?([0-5][0-9])?\s*(am|pm)\b""", RegexOption.IGNORE_CASE)
+        val re24 = Regex("""\b([01]?[0-9]|2[0-3]):([0-5][0-9])\b""", RegexOption.IGNORE_CASE)
+        when {
+            re12.containsMatchIn(lower) -> {
+                val m = re12.find(lower)!!
+                var h = m.groupValues[1].toInt()
+                val mm = m.groupValues[2].ifBlank { "0" }.toInt()
+                val ap = m.groupValues[3].lowercase()
+                if (ap == "pm" && h != 12) h += 12
+                if (ap == "am" && h == 12) h = 0
+                hour = h; minute = mm
+            }
+            re24.containsMatchIn(lower) -> {
+                val m = re24.find(lower)!!
+                hour = m.groupValues[1].toInt()
+                minute = m.groupValues[2].toInt()
             }
         }
+        val h = hour ?: 9
+        val m = minute ?: 0
 
-        alarm.notification.forEach { nt ->
-            if (!isValidISO(nt)) {
-                issues.add("Invalid notification datetime: $nt (removed)")
-            } else {
-                fixedNotifications.add(OffsetDateTime.parse(nt))
-            }
-        }
-
-        fixedNotifications = fixedNotifications.toSet().toMutableList()
-        fixedNotifications.sort()
-
-        if (eventTime != null && !fixedNotifications.contains(eventTime)) {
-            fixedNotifications.add(eventTime)
-            fixedNotifications.sort()
-            issues.add("Event datetime was missing, added automatically")
-        }
-
-        val fixedAlarm = alarm.copy(
-            distance = normalizeDistance(alarm.distance),
-            notification = fixedNotifications.map { it.toString() },
-            response = alarm.response,
-            initial_note = alarm.initial_note
+        // Weekdays
+        val daysMap = mapOf(
+            "sunday" to Calendar.SUNDAY, "monday" to Calendar.MONDAY, "tuesday" to Calendar.TUESDAY,
+            "wednesday" to Calendar.WEDNESDAY, "thursday" to Calendar.THURSDAY,
+            "friday" to Calendar.FRIDAY, "saturday" to Calendar.SATURDAY
         )
-        return fixedAlarm to (if (issues.isEmpty()) listOf("✅ Alarm is valid") else issues)
-    }
+        val recurringDays = daysMap.filter { lower.contains(it.key) }.values.toList().ifEmpty { null }
 
-    private fun isValidISO(dateTime: String): Boolean = try {
-        OffsetDateTime.parse(dateTime); true
-    } catch (_: DateTimeParseException) { false }
-
-    private fun normalizeDistance(distance: String?): String? {
-        if (distance == null) return null
-        val lower = distance.lowercase(Locale.getDefault()).trim()
-        return when {
-            lower.contains("km") -> {
-                val value = lower.replace("km", "").trim().toDoubleOrNull()
-                if (value != null) "%.2f KM".format(value) else distance
-            }
-            lower.contains("meter") || lower.contains("m ") -> {
-                val value = lower.replace(Regex("[^0-9.]"), "").toDoubleOrNull()
-                if (value != null) "%.2f KM".format(value / 1000.0) else distance
-            }
-            lower.contains("mile") -> {
-                val value = lower.replace(Regex("[^0-9.]"), "").toDoubleOrNull()
-                if (value != null) "%.2f KM".format(value * 1.60934) else distance
-            }
-            lower.contains("feet") || lower.contains("ft") -> {
-                val value = lower.replace(Regex("[^0-9.]"), "").toDoubleOrNull()
-                if (value != null) "%.2f KM".format(value / 3280.84) else distance
-            }
-            else -> distance
+        // Explicit date dd-mm-yyyy or dd/mm/yyyy
+        val reDate = Regex("""\b([0-3]?\d)[-/]([01]?\d)[-/](20\d\d)\b""")
+        val explicitEpoch = reDate.find(lower)?.let { d ->
+            val day = d.groupValues[1].toInt()
+            val mon = d.groupValues[2].toInt() - 1
+            val yr = d.groupValues[3].toInt()
+            Calendar.getInstance().apply {
+                set(Calendar.YEAR, yr); set(Calendar.MONTH, mon); set(Calendar.DAY_OF_MONTH, day)
+                set(Calendar.HOUR_OF_DAY, h); set(Calendar.MINUTE, m)
+                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
         }
+
+        // Next occurrence if needed
+        val timeMillis = explicitEpoch ?: run {
+            Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, h); set(Calendar.MINUTE, m)
+                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+                if (timeInMillis <= now.timeInMillis) add(Calendar.DAY_OF_YEAR, 1)
+            }.timeInMillis
+        }
+
+        val isImportant = lower.contains("important")
+        val label = when {
+            lower.contains("lunch") -> "Eat lunch"
+            lower.contains("drink tea") -> "Drink tea"
+            lower.contains("doctor") -> "Doctor appointment"
+            lower.contains("meeting") && isImportant -> "Important meeting"
+            lower.contains("meeting") -> "Meeting"
+            else -> "Alarm"
+        }
+
+        // For recurring, compute the first upcoming trigger similarly
+        val firstMillis = if (!recurringDays.isNullOrEmpty()) {
+            Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, h); set(Calendar.MINUTE, m)
+                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+                var add = 0
+                while (add <= 7) {
+                    val c = (clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, add) }
+                    if (recurringDays.contains(c.get(Calendar.DAY_OF_WEEK)) && c.timeInMillis > now.timeInMillis) {
+                        timeInMillis = c.timeInMillis; break
+                    }
+                    add++
+                }
+            }.timeInMillis
+        } else timeMillis
+
+        return listOf(
+            NetworkAlarm(
+                label = label,
+                timeMillis = firstMillis,
+                important = isImportant,
+                recurringDays = recurringDays
+            )
+        )
     }
 }

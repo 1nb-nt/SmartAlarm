@@ -1,29 +1,24 @@
 package com.example.alarmchatapp
 
-import androidx.room.*
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
 
 @Dao
 interface AlarmDao {
-    @Insert
-    suspend fun insert(alarm: Alarm): Long
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insert(alarm: Alarm): Long
 
-    @Query("SELECT * FROM alarms ORDER BY triggerTimeMillis ASC")
-    suspend fun getAll(): List<Alarm>
+    @Query("SELECT * FROM alarms ORDER BY timeMillis ASC")
+    fun getAllAlarms(): List<Alarm>
 
-    @Query("SELECT * FROM alarms WHERE triggerTimeMillis >= :start ORDER BY triggerTimeMillis ASC LIMIT :limit")
-    suspend fun getUpcomingAlarms(start: Long, limit: Int): List<Alarm>
+    @Query("SELECT * FROM alarms WHERE id = :id LIMIT 1")
+    fun getById(id: Int): Alarm?
 
-    @Query("SELECT * FROM alarms WHERE id = :id")
-    suspend fun getById(id: Int): Alarm?
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun upsert(alarm: Alarm): Long
 
-    @Update
-    suspend fun update(alarm: Alarm)
-
-    @Delete
-    suspend fun delete(alarm: Alarm)
-
-    // NEW: used by the worker to fetch alarms due now or earlier
-    @Query("SELECT * FROM alarms WHERE triggerTimeMillis <= :now ORDER BY triggerTimeMillis ASC")
-    suspend fun getDue(now: Long): List<Alarm>
-
+    @Query("DELETE FROM alarms WHERE id = :id")
+    fun deleteAlarm(id: Int)
 }

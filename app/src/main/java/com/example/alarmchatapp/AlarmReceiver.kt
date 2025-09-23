@@ -32,28 +32,30 @@ class AlarmReceiver : BroadcastReceiver() {
             return
         }
 
-        // ✅ Do not start activity directly, rely on NotificationHelper full-screen intent
         try {
             NotificationHelper.showAlarmNotification(context, id, label, note)
         } catch (e: Exception) {
             Log.e("AlarmReceiver", "Failed to show full-screen alarm notification", e)
         }
 
-        // Reschedule or clean up asynchronously (unchanged)
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val dao = AppDatabase.getDatabase(context).alarmDao()
                 val alarm = dao.getById(id) ?: return@launch
+
                 if (alarm.isRecurring) {
                     val firedCal = Calendar.getInstance().apply { timeInMillis = alarm.triggerTimeMillis }
                     val hour = firedCal.get(Calendar.HOUR_OF_DAY)
                     val minute = firedCal.get(Calendar.MINUTE)
+
                     val nextTrigger: Long? = when {
                         alarm.recurringDays?.size == 7 -> {
                             Calendar.getInstance().apply {
-                                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-                                set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
+                                set(Calendar.SECOND, 0)
+                                set(Calendar.MILLISECOND, 0)
+                                set(Calendar.HOUR_OF_DAY, hour)
+                                set(Calendar.MINUTE, minute)
                                 add(Calendar.DAY_OF_YEAR, 1)
                             }.timeInMillis
                         }
@@ -62,6 +64,7 @@ class AlarmReceiver : BroadcastReceiver() {
                         }
                         else -> null
                     }
+
                     if (nextTrigger != null) {
                         dao.update(alarm.copy(triggerTimeMillis = nextTrigger))
                         AlarmHelper.scheduleAlarmClockPublic(

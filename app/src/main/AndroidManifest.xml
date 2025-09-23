@@ -4,6 +4,7 @@
 
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -13,9 +14,27 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
     <uses-permission android:name="android.permission.VIBRATE" />
 
+
+    <!-- Help resolve Google/Samsung Clock handlers when we explicitly target packages -->
     <queries>
+        <!-- Intent actions used -->
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DISMISS_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SHOW_ALARMS" />
+        </intent>
+
+        <!-- Common clock packages -->
+        <package android:name="com.google.android.deskclock" />
+        <package android:name="com.android.deskclock" />
+        <package android:name="com.sec.android.app.clockpackage" />
         <package android:name="com.google.android.apps.maps" />
     </queries>
+
 
     <application
         android:name=".MyApp"
@@ -36,7 +55,7 @@
 
         <activity
             android:name=".AlarmActivity"
-            android:launchMode="singleTop"
+            android:launchMode="singleInstance"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:excludeFromRecents="true"
@@ -48,23 +67,27 @@
             android:enabled="true"
             android:exported="true"/>
 
-        <receiver
-            android:name=".RescheduleReceiver"
-            android:enabled="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
 
         <receiver
             android:name=".DateTimeChangeReceiver"
-            android:exported="false">
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
                 <action android:name="android.intent.action.DATE_CHANGED" />
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="com.example.alarmchatapp.MIDNIGHT_HYDRATE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".RescheduleReceiver"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.PACKAGE_REPLACED"/>
             </intent-filter>
         </receiver>
 

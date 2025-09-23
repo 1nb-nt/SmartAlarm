@@ -7,8 +7,8 @@ import androidx.room.PrimaryKey
 data class ScheduledTask(
     @PrimaryKey(autoGenerate = true)
     val id: Int = 0,
-    val description: String,
-    val executionTime: Long,
-    val isRecurring: Boolean = false,
-    val endDate: Long? = null
+    val taskName: String,
+    val triggerTimeMillis: Long,
+    val isRecurring: Boolean,
+    val recurringDays: List<Int>?
 )

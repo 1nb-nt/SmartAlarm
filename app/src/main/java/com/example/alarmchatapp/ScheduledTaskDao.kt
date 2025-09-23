@@ -4,19 +4,21 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Update
-import androidx.room.Delete
 
 @Dao
 interface ScheduledTaskDao {
     @Insert
-    suspend fun insert(task: ScheduledTask)
-
-    @Query("SELECT * FROM scheduled_tasks WHERE executionTime <= :now")
-    suspend fun getTasksDue(now: Long): List<ScheduledTask>
+    suspend fun insert(task: ScheduledTask): Long
 
     @Update
     suspend fun update(task: ScheduledTask)
 
-    @Delete
-    suspend fun delete(task: ScheduledTask)
+    @Query("SELECT * FROM scheduled_tasks")
+    suspend fun getAll(): List<ScheduledTask>
+
+    @Query("DELETE FROM scheduled_tasks WHERE id=:id")
+    suspend fun deleteById(id: Int)
+
+    @Query("DELETE FROM scheduled_tasks")
+    suspend fun deleteAll()
 }
