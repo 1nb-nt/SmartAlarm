@@ -8,7 +8,7 @@ import com.example.alarmchatapp.workers.DailyClockHydratorWorker
 
 class DateTimeChangeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        // On time/date/timezone change, immediately hydrate "tomorrow" one-shots
+        DailyClockHydratorWorker.scheduleDailyHydrator(context)
         DailyClockHydratorWorker.scheduleCatchUp(context)
     }
 }

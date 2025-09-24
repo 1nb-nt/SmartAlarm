@@ -71,20 +71,10 @@ fun AppContent() {
     val navController = rememberNavController()
     val ctx = LocalContext.current
 
-    // Startup: schedule daily hydrator and immediate catch-up once
+// Startup: schedule daily hydrator (00:00:01 local) and run a one‑time catch‑up now
     LaunchedEffect(ctx) {
         com.example.alarmchatapp.workers.DailyClockHydratorWorker.scheduleDailyHydrator(ctx)
         com.example.alarmchatapp.workers.DailyClockHydratorWorker.scheduleCatchUp(ctx)
-    }
-
-    // DEBUG tools — remove later
-    Row(Modifier.fillMaxWidth().padding(8.dp)) {
-        Button(onClick = {
-            com.example.alarmchatapp.workers.DailyClockHydratorWorker.scheduleCatchUp(ctx)
-            com.example.alarmchatapp.utils.SystemAlarmScheduler.showAlarms(ctx)
-        }) {
-            Text("Hydrate now (debug)")
-        }
     }
 
     NavHost(navController, startDestination = "chat") {
@@ -337,7 +327,11 @@ fun InputSection(
                 try {
                     onProcessingChange(true)
 
-                    // Augment query with local date/timezone for the API
+                    // Ensure midnight worker and run catch-up
+                    com.example.alarmchatapp.workers.DailyClockHydratorWorker.scheduleDailyHydrator(context)
+                    com.example.alarmchatapp.workers.DailyClockHydratorWorker.scheduleCatchUp(context)
+
+                    // Augment query with local date/timezone for backend
                     val zone = java.time.ZoneId.systemDefault()
                     val todayDmy = java.time.LocalDate.now(zone)
                         .format(java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy"))
@@ -379,14 +373,13 @@ fun InputSection(
 
                     val title = (fixed.title ?: "").ifBlank { "Alarm" }
                     val assistantMessage = fixed.response?.takeIf { it.isNotBlank() }
-                    val initialNote = fixed.initial_note
 
                     var isoList: List<String> = fixed.notification
                     if (isoList.isEmpty() && !fixed.datetime.isNullOrBlank()) {
                         isoList = listOf(fixed.datetime!!)
                     }
 
-                    // Time-only normalization
+                    // Time-only normalization (from fixed.time HH:mm)
                     if (isoList.isEmpty() && !fixed.time.isNullOrBlank()) {
                         val parts = fixed.time.split(":")
                         val hour = parts.getOrNull(0)?.toIntOrNull()
@@ -422,7 +415,7 @@ fun InputSection(
                             val minStr = m.groupValues.getOrNull(5).orEmpty().ifBlank { "0" }
                             val ampm = m.groupValues.getOrNull(6)?.lowercase(java.util.Locale.getDefault())
                             val h = hStr.toIntOrNull()
-                             val min = minStr.toIntOrNull()
+                            val min = minStr.toIntOrNull()
                             if (d != null && mo != null && y != null && h != null && min != null &&
                                 d in 1..31 && mo in 1..12 && h in 0..23 && min in 0..59
                             ) {
@@ -442,7 +435,7 @@ fun InputSection(
                         }
                     }
 
-                    // Time-only fallback
+                    // Generic time-only fallback with "tomorrow" override from raw text
                     if (isoList.isEmpty()) {
                         val lowerTmp = rawText.lowercase(java.util.Locale.getDefault())
                         val timeRegex = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE)
@@ -462,10 +455,8 @@ fun InputSection(
                                     set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
                                     set(java.util.Calendar.HOUR_OF_DAY, hour24); set(java.util.Calendar.MINUTE, min)
                                 }
-                                // CHANGE HERE: honor explicit "tomorrow" even if time is still ahead today
                                 val forceTomorrow = lowerTmp.contains("tomorrow")
                                 if (forceTomorrow || cal.before(now)) cal.add(java.util.Calendar.DAY_OF_YEAR, 1)
-
                                 val instant = java.time.Instant.ofEpochMilli(cal.timeInMillis)
                                 val offset = java.time.ZoneId.systemDefault().rules.getOffset(instant)
                                 val iso = java.time.OffsetDateTime.ofInstant(instant, offset).toString()
@@ -474,7 +465,7 @@ fun InputSection(
                         }
                     }
 
-                    // Convert to future epoch millis and dedupe
+                    // To future epoch millis
                     val nowMs = System.currentTimeMillis()
                     val futureTimes = isoList.mapNotNull {
                         runCatching { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull()
@@ -490,17 +481,19 @@ fun InputSection(
                     val dao = AppDatabase.getDatabase(context).alarmDao()
                     var scheduledCount = 0
 
-                    // Intent predicates for important meeting
                     val lower = rawText.lowercase(java.util.Locale.getDefault())
                     val hasExplicitDate = Regex("""\d{1,2}[/-]\d{1,2}[/-]\d{2,4}""").containsMatchIn(lower)
-                    val weekdayWords = listOf("sunday","monday","tuesday","wednesday","thursday","friday","saturday","sun","mon","tue","tues","wed","thu","thur","thurs","fri","sat")
+                    val weekdayWords = listOf(
+                        "sunday","monday","tuesday","wednesday","thursday","friday","saturday",
+                        "sun","mon","tue","tues","wed","thu","thur","thurs","fri","sat"
+                    )
                     val mentionsWeekday = weekdayWords.any { w ->
                         lower.contains("important meeting on $w") ||
                                 lower.contains("important on $w") ||
                                 lower.contains("meeting on $w")
                     }
 
-                    // RECURRING SERIES
+                    // RECURRING SERIES (weekly)
                     if (weekly.recurringDays != null && !weekly.nextWeekOnly) {
                         val hhmmPairs = hhmmPairsFromFutureTimes(futureTimes)
                         for ((hour, minute) in hhmmPairs) {
@@ -547,24 +540,17 @@ fun InputSection(
                         )
                         scheduledCount = 1
 
-                        // IMPORTANT with explicit date: schedule via worker for all returned datetimes
+                        // IMPORTANT with explicit date: force place now (exactly three)
                     } else if (lower.contains("important") && hasExplicitDate) {
-                        for (t in futureTimes.take(3)) {
-                            val id = dao.insert(
-                                Alarm(message = title, triggerTimeMillis = t, isRecurring = false, recurringDays = null)
-                            ).toInt()
-                            com.example.alarmchatapp.workers.ClockPreSchedulerWorker.enqueue(
-                                context = context,
-                                label = title,
-                                triggerAt = t,
-                                isRecurring = false,
-                                recurringDays = null,
-                                alarmId = id
-                            )
-                            scheduledCount++
-                        }
+                        val placed = com.example.alarmchatapp.utils.AlarmHelper.forcePlaceThreeOneShotsInClock(
+                            context = context,
+                            dao = dao,
+                            title = title,
+                            futureTimes = futureTimes
+                        )
+                        scheduledCount += placed
 
-                        // IMPORTANT with weekday: place three alarms now in Clock
+                        // IMPORTANT with weekday: enrich to three and force place now
                     } else if (lower.contains("important") && mentionsWeekday) {
                         val enrichedTimes = buildList {
                             addAll(futureTimes)
@@ -590,7 +576,7 @@ fun InputSection(
                         )
                         scheduledCount += placed
 
-                        // DEFAULT one-shots: store and preschedule
+                        // DEFAULT one-shots: store + prescheduler
                     } else {
                         for (t in futureTimes) {
                             val id = dao.insert(

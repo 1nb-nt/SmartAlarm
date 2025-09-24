@@ -21,14 +21,14 @@ class ClockPreSchedulerWorker(appContext: Context, params: WorkerParameters) : C
 
             val now = System.currentTimeMillis()
             // lead/guard rails
-            val SAFETY_LEAD_MS = TimeUnit.MINUTES.toMillis(2)   // create ~2 min before the JSON instant
-            val EARLY_SLACK_MS = TimeUnit.SECONDS.toMillis(20)  // if woke too early, re-enqueue precisely
-            val LATE_GRACE_MS = TimeUnit.SECONDS.toMillis(60)   // if ≥60s late, skip to avoid “tomorrow”
+            val SAFETY_LEAD_MS = TimeUnit.MINUTES.toMillis(3)   // widened to ~3 min before JSON instant
+            val EARLY_SLACK_MS = TimeUnit.SECONDS.toMillis(45)  // more tolerance to wakeups
+            val LATE_GRACE_MS = TimeUnit.SECONDS.toMillis(40)   // attempt within ~40s after target
 
-            // Only create inside the final window just before the JSON instant
             val targetWindowStart = triggerAt - SAFETY_LEAD_MS
+
+            // Too early: re-enqueue to precise start of window (min 0 delay)
             if (now < targetWindowStart - EARLY_SLACK_MS) {
-                // Re-enqueue for the start of the window
                 reenqueueSelf(
                     uniqueName = "presched-$alarmId",
                     delayMs = (targetWindowStart - now).coerceAtLeast(0L),
@@ -40,8 +40,9 @@ class ClockPreSchedulerWorker(appContext: Context, params: WorkerParameters) : C
                 )
                 return Result.success()
             }
+
+            // Too late past grace: skip to avoid rolling to tomorrow in OEM clock
             if (now > triggerAt + LATE_GRACE_MS) {
-                // Too late — creating now could roll Clock to the next day
                 Log.w("ClockPreScheduler", "Skipping late create to avoid rolling to tomorrow (id=$alarmId)")
                 return Result.success()
             }
@@ -63,7 +64,7 @@ class ClockPreSchedulerWorker(appContext: Context, params: WorkerParameters) : C
                     showToast = false
                 )
             } else {
-                // One-shot: create inside the window so Clock uses the correct date’s HH:mm
+                // One-shot: create inside the final window so correct date’s HH:mm is used
                 AlarmHelper.scheduleAlarmClockPublic(
                     context = applicationContext,
                     label = label,
@@ -76,7 +77,7 @@ class ClockPreSchedulerWorker(appContext: Context, params: WorkerParameters) : C
                 // Light stagger improves reliability when multiple alarms share a minute
                 delay(250)
 
-                // Schedule cleanup ~10 minutes after ring with the unique label "Title · #id"
+                // Schedule cleanup ~10 minutes after ring with unique label "Title · #id"
                 enqueueCleanup(
                     label = "${label.trim()} · #$alarmId",
                     whenMillis = triggerAt + TimeUnit.MINUTES.toMillis(10),
@@ -139,7 +140,7 @@ class ClockPreSchedulerWorker(appContext: Context, params: WorkerParameters) : C
             alarmId: Int = -1
         ) {
             val now = System.currentTimeMillis()
-            val SAFETY_LEAD_MS = TimeUnit.MINUTES.toMillis(2)
+            val SAFETY_LEAD_MS = TimeUnit.MINUTES.toMillis(3) // match doWork window
             val delay = (triggerAt - SAFETY_LEAD_MS - now).coerceAtLeast(0L)
 
             val data = Data.Builder()

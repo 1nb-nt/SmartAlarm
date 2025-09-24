@@ -1,15 +1,14 @@
-// app/src/main/java/com/example/alarmchatapp/workers/DailyClockHydratorWorker.kt
 package com.example.alarmchatapp.workers
-
 import android.content.Context
 import android.util.Log
 import androidx.work.*
 import com.example.alarmchatapp.AppDatabase
 import com.example.alarmchatapp.utils.AlarmHelper
 import com.example.alarmchatapp.utils.HydratedStore
+import com.example.alarmchatapp.workers.ClockCleanupWorker
+import kotlinx.coroutines.delay
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.delay
 
 class DailyClockHydratorWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
 
@@ -17,29 +16,28 @@ class DailyClockHydratorWorker(appContext: Context, params: WorkerParameters) : 
         return try {
             val dao = AppDatabase.getDatabase(applicationContext).alarmDao()
             val all = runCatching { dao.getAll() }.getOrDefault(emptyList())
+            val (start, end) = dayBoundsToday()
 
-            val (todayStart, todayEnd) = dayBoundsToday()
-
-            // One‑time alarms for TODAY that have not been pushed to Google Clock yet
             val targets = all.filter { a ->
                 !a.isRecurring &&
-                        a.triggerTimeMillis in todayStart until todayEnd &&
+                        a.triggerTimeMillis in start until end &&
                         !HydratedStore.wasHydrated(applicationContext, a.id)
             }
 
             for (a in targets.sortedBy { it.triggerTimeMillis }) {
-                // Create in Google Clock with unique label "Title · #id"
+                // Create into the device clock app (vendor‑aware)
                 AlarmHelper.scheduleAlarmClockPublic(
                     context = applicationContext,
                     label = a.message.ifBlank { "Alarm" },
                     triggerAt = a.triggerTimeMillis,
                     alarmId = a.id,
                     initialNote = null,
-                    skipUi = true
+                    skipUi = true,
+                    showToast = false
                 )
                 HydratedStore.markHydrated(applicationContext, a.id)
 
-                // Best‑effort cleanup 10 minutes after the ring time
+                // Cleanup 10 min after ring to delete one‑shots
                 enqueueCleanup(
                     context = applicationContext,
                     label = "${a.message.trim()} · #${a.id}",
@@ -47,10 +45,8 @@ class DailyClockHydratorWorker(appContext: Context, params: WorkerParameters) : 
                     whenMillis = a.triggerTimeMillis + TimeUnit.MINUTES.toMillis(10)
                 )
 
-                // Small stagger so OEM clocks don’t drop back‑to‑back creates
                 delay(250)
             }
-
             Result.success()
         } catch (e: Exception) {
             Log.e("DailyClockHydrator", "Failed", e)
@@ -71,10 +67,7 @@ class DailyClockHydratorWorker(appContext: Context, params: WorkerParameters) : 
 
     private fun enqueueCleanup(context: Context, label: String, alarmId: Int, whenMillis: Long) {
         val delay = (whenMillis - System.currentTimeMillis()).coerceAtLeast(0L)
-        val data = Data.Builder()
-            .putString("label", label)
-            .putInt("alarmId", alarmId)
-            .build()
+        val data = Data.Builder().putString("label", label).putInt("alarmId", alarmId).build()
         val req = OneTimeWorkRequestBuilder<ClockCleanupWorker>()
             .setInitialDelay(delay, TimeUnit.MILLISECONDS)
             .setInputData(data)
@@ -85,10 +78,9 @@ class DailyClockHydratorWorker(appContext: Context, params: WorkerParameters) : 
 
     companion object {
         fun scheduleDailyHydrator(context: Context) {
-            // Run at ~00:00:01 local time every day
-            val delay = computeDelayToNext00h00m01()
+            val delayMs = computeDelayToNext00h00m01()
             val req = PeriodicWorkRequestBuilder<DailyClockHydratorWorker>(24, TimeUnit.HOURS)
-                .setInitialDelay(delay, TimeUnit.MILLISECONDS)
+                .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
                 .addTag("clock-daily-hydrator")
                 .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
@@ -99,7 +91,6 @@ class DailyClockHydratorWorker(appContext: Context, params: WorkerParameters) : 
         }
 
         fun scheduleCatchUp(context: Context) {
-            // Fire once now (e.g., on first app open or after reboot) to hydrate today's items
             val once = OneTimeWorkRequestBuilder<DailyClockHydratorWorker>()
                 .addTag("clock-daily-hydrator-catchup")
                 .build()

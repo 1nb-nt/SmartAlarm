@@ -1,4 +1,3 @@
-// app/src/main/java/com/example/alarmchatapp/utils/AlarmHelper.kt
 package com.example.alarmchatapp.utils
 
 import android.content.Context
@@ -14,7 +13,7 @@ import java.util.Date
 object AlarmHelper {
 
     // One-time alarm via Google Clock (minute precision).
-    // showToast=false is recommended when called from workers.
+// showToast=false is recommended when called from workers.
     fun scheduleAlarmClockPublic(
         context: Context,
         label: String,
@@ -53,7 +52,7 @@ object AlarmHelper {
     }
 
     // Weekly/daily recurring alarm using AlarmClock EXTRA_DAYS (Calendar constants).
-    // IMPORTANT: alarmId is required so the label includes “· #id” for best-effort deletion later.
+// IMPORTANT: alarmId is required so the label includes “· #id” for best-effort deletion later.
     fun scheduleWeeklyInClock(
         context: Context,
         label: String,
@@ -89,7 +88,7 @@ object AlarmHelper {
     }
 
     // Programmatic best-effort delete for a one-shot in Google Clock.
-    // Tries by unique label, then by time, then opens Clock UI if OEM ignores dismiss.
+// Tries by unique label, then by time, then opens Clock UI if OEM ignores dismiss.
     fun cancelOneShotInClock(
         context: Context,
         title: String,
@@ -104,7 +103,7 @@ object AlarmHelper {
     }
 
     // Programmatic best-effort delete for a recurring series (weekly/daily).
-    // Uses unique label and the series hour:minute; then opens Clock UI as fallback.
+// Uses unique label and the series hour:minute; then opens Clock UI as fallback.
     fun cancelRecurringInClock(
         context: Context,
         title: String,
@@ -116,21 +115,6 @@ object AlarmHelper {
         ClockDismissHelper.dismissByLabel(context, uniqueLabel)
         ClockDismissHelper.dismissByTime(context, hour, minute)
         SystemAlarmScheduler.showAlarms(context)
-    }
-
-    // Helpers
-
-    private fun labelWithNote(label: String, note: String?): String =
-        if (note.isNullOrBlank()) label else "$label — $note"
-
-    private fun labelForId(title: String, id: Int, note: String? = null): String {
-        val base = "${title.trim()} · #$id"
-        return if (note.isNullOrBlank()) base else "$base — $note"
-    }
-
-    private fun hourMinuteOf(millis: Long): Pair<Int, Int> {
-        val cal = Calendar.getInstance().apply { timeInMillis = millis }
-        return cal.get(Calendar.HOUR_OF_DAY) to cal.get(Calendar.MINUTE)
     }
 
     // Next occurrence among provided weekdays at hour:minute.
@@ -164,44 +148,76 @@ object AlarmHelper {
         Calendar.SATURDAY -> "Saturday"
         else -> "Unknown"
     }
+
+    // Force-create up to three one-shot alarms immediately in Google Clock,
+// inserting them into Room first so labels include “· #id”.
+// Use this for “important + explicit date” and “important + weekday” paths.
     suspend fun forcePlaceThreeOneShotsInClock(
         context: Context,
         dao: AlarmDao,
         title: String,
         futureTimes: List<Long>
     ): Int {
+        val three = futureTimes.distinct().sorted().take(3)
         var count = 0
-        futureTimes.take(3).forEach { t ->
-            val id = dao.insert(
-                Alarm(
-                    message = title,
-                    triggerTimeMillis = t,
-                    isRecurring = false,
-                    recurringDays = null
-                )
-            ).toInt()
+        for (t in three) {
+            // Insert local row first for stable unique label
+            val id = runCatching {
+                dao.insert(
+                    Alarm(
+                        message = title,
+                        triggerTimeMillis = t,
+                        isRecurring = false,
+                        recurringDays = null
+                    )
+                ).toInt()
+            }.getOrElse { -1 }
 
-            // Remove any existing matching Clock entry first
-            AlarmHelper.cancelOneShotInClock(
-                context = context,
-                title = title,
-                alarmId = id,
-                triggerAtMillis = t
-            )
+            // Optional: try to dismiss any stale duplicates (best-effort)
+            if (id > 0) {
+                runCatching {
+                    cancelOneShotInClock(
+                        context = context,
+                        title = title,
+                        alarmId = id,
+                        triggerAtMillis = t
+                    )
+                }.onFailure { /* ignore */ }
+            }
 
-            // Create the Clock alarm immediately
-            AlarmHelper.scheduleAlarmClockPublic(
+            // Create the Clock alarm immediately for the HH:mm of 't'
+            scheduleAlarmClockPublic(
                 context = context,
                 label = title,
                 triggerAt = t,
-                alarmId = id,
+                alarmId = if (id > 0) id else (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
                 initialNote = null,
                 skipUi = true,
                 showToast = false
             )
+
+            // Tiny stagger to avoid OEM dropping back-to-back creates
+            try {
+                android.os.SystemClock.sleep(200L)
+            } catch (_: Throwable) { }
+
             count++
         }
         return count
     }
 
+// Helpers
+
+    private fun labelWithNote(label: String, note: String?): String =
+        if (note.isNullOrBlank()) label else "$label — $note"
+
+    private fun labelForId(title: String, id: Int, note: String? = null): String {
+        val base = "${title.trim()} · #$id"
+        return if (note.isNullOrBlank()) base else "$base — $note"
+    }
+
+    private fun hourMinuteOf(millis: Long): Pair<Int, Int> {
+        val cal = Calendar.getInstance().apply { timeInMillis = millis }
+        return cal.get(Calendar.HOUR_OF_DAY) to cal.get(Calendar.MINUTE)
+    }
 }

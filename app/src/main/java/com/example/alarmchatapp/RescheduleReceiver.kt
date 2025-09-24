@@ -6,6 +6,7 @@ import android.content.Intent
 import android.util.Log
 import com.example.alarmchatapp.utils.AlarmHelper
 import com.example.alarmchatapp.workers.ClockPreSchedulerWorker
+import com.example.alarmchatapp.workers.DailyClockHydratorWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -27,11 +28,11 @@ class RescheduleReceiver : BroadcastReceiver() {
                 alarms.forEach { a ->
                     try {
                         if (a.isRecurring && !a.recurringDays.isNullOrEmpty()) {
-                            val cal = Calendar.getInstance().apply { timeInMillis = a.triggerTimeMillis }
-                            val hour = cal.get(Calendar.HOUR_OF_DAY)
-                            val minute = cal.get(Calendar.MINUTE)
-
-                            // Weekly/daily series: recreate in Clock with id for label matching
+                            // Restore weekly into Clock (id+label stable)
+                            val cal = java.util.Calendar.getInstance()
+                                .apply { timeInMillis = a.triggerTimeMillis }
+                            val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+                            val minute = cal.get(java.util.Calendar.MINUTE)
                             AlarmHelper.scheduleWeeklyInClock(
                                 context = context,
                                 label = a.message,
@@ -44,7 +45,7 @@ class RescheduleReceiver : BroadcastReceiver() {
                             )
                             restored++
                         } else if (a.triggerTimeMillis > now) {
-                            // One‑shot: defer creation to a just‑in‑time worker
+                            // Re-enqueue prescheduler for future one-shots
                             ClockPreSchedulerWorker.enqueue(
                                 context = context,
                                 label = a.message,
@@ -55,13 +56,14 @@ class RescheduleReceiver : BroadcastReceiver() {
                             )
                             restored++
                         }
-                    } catch (inner: Exception) {
-                        Log.w("RescheduleReceiver", "Failed to restore alarm id=${a.id}", inner)
+                    } catch (_: Exception) {
                     }
                 }
-                Log.d("RescheduleReceiver", "Restored $restored alarms.")
-            } catch (e: Exception) {
-                Log.e("RescheduleReceiver", "Failed to restore alarms", e)
+
+                // Keep the midnight worker alive and hydrate immediately post-boot/update
+                DailyClockHydratorWorker.scheduleDailyHydrator(context)
+                DailyClockHydratorWorker.scheduleCatchUp(context)
+                Log.d("RescheduleReceiver", "Restored=$restored")
             } finally {
                 pending.finish()
             }
