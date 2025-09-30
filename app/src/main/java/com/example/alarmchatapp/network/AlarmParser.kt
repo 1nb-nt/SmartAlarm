@@ -9,17 +9,18 @@ import java.util.Locale
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class AlarmContract(
-    val p_type: String = "alarm",
-    val alarm_type: String? = null,
+    val ptype: String = "alarm",
+    val alarmtype: String? = null,
     val title: String? = null,
-    val datetime: String? = null,   // ISO 8601
-    val time: String? = null,       // "HH:mm"
+    val datetime: String? = null,          // ISO 8601
+    val time: String? = null,              // e.g. HH:mm or HHmm
     val location: String? = null,
-    val distance: String? = null,
+    val distance: String? = null,          // normalized to KM in validate
     val timezone: String? = "Asia/Kolkata",
-    val recurrence: Any? = "once",  // String or List<String>
-    val ex_days: List<String> = emptyList(),
-    val notification: List<String> = emptyList()
+    val recurrence: Any? = "once",         // "once" | "daily" | [days...]
+    val exdays: List<String> = emptyList(),
+    val notification: List<String> = emptyList(), // list of ISO 8601 strings
+    val responseText: String? = null       // optional natural-language response
 )
 
 object AlarmParser {
@@ -29,7 +30,25 @@ object AlarmParser {
         return try {
             val rawMap: Map<String, Any?> =
                 mapper.readValue(json, object : TypeReference<Map<String, Any?>>() {})
-            val recurrence: Any? = rawMap["recurrence"]?.let {
+
+            // Accept multiple key spellings from LLMs/backends
+            fun getString(vararg keys: String): String? {
+                for (k in keys) {
+                    val v = rawMap[k]
+                    if (v is String && v.isNotBlank()) return v
+                }
+                return null
+            }
+
+            fun getStringList(vararg keys: String): List<String> {
+                for (k in keys) {
+                    val v = rawMap[k]
+                    if (v is List<*>) return v.filterIsInstance<String>()
+                }
+                return emptyList()
+            }
+
+            val recurrenceAny: Any? = rawMap["recurrence"]?.let {
                 when (it) {
                     is String -> it
                     is List<*> -> it.filterIsInstance<String>()
@@ -38,30 +57,28 @@ object AlarmParser {
             } ?: "once"
 
             AlarmContract(
-                p_type = rawMap["p_type"] as? String ?: "alarm",
-                alarm_type = (rawMap["alarm_type"] as? String) ?: (rawMap["alarm type"] as? String),
-                title = rawMap["title"] as? String,
-                datetime = rawMap["datetime"] as? String,
-                time = rawMap["time"] as? String,
-                location = rawMap["location"] as? String,
-                distance = normalizeDistance(rawMap["distance"] as? String),
-                timezone = rawMap["timezone"] as? String ?: "Asia/Kolkata",
-                recurrence = recurrence,
-                ex_days = (rawMap["ex_days"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
-                notification = when (val n = rawMap["notification"]) {
-                    is List<*> -> n.filterIsInstance<String>()
-                    else -> emptyList()
-                }
+                ptype = getString("ptype", "p_type") ?: "alarm",
+                alarmtype = getString("alarmtype", "alarm_type", "alarm type"),
+                title = getString("title"),
+                datetime = getString("datetime"),
+                time = getString("time"),
+                location = getString("location"),
+                distance = normalizeDistance(getString("distance")),
+                timezone = getString("timezone") ?: "Asia/Kolkata",
+                recurrence = recurrenceAny,
+                exdays = getStringList("exdays", "ex_days", "ex_days_list"),
+                notification = getStringList("notification", "notifications"),
+                responseText = getString("responseText", "response", "message")
             )
         } catch (e: Exception) {
-            println("Error parsing JSON: ${e.message}")
+            // Fall back to safe defaults on any parsing problem
             AlarmContract()
         }
     }
 
     fun validateAndFixAlarm(alarm: AlarmContract): Pair<AlarmContract, List<String>> {
         val issues = mutableListOf<String>()
-        var fixedNotifications: MutableList<OffsetDateTime> = mutableListOf()
+        val fixedList = mutableListOf<OffsetDateTime>()
 
         val eventTime: OffsetDateTime? = alarm.datetime?.let {
             if (isValidISO(it)) OffsetDateTime.parse(it) else {
@@ -71,50 +88,54 @@ object AlarmParser {
         }
 
         alarm.notification.forEach { nt ->
-            if (!isValidISO(nt)) {
-                issues.add("Invalid notification datetime: $nt (removed)")
+            if (isValidISO(nt)) {
+                fixedList.add(OffsetDateTime.parse(nt))
             } else {
-                fixedNotifications.add(OffsetDateTime.parse(nt))
+                issues.add("Invalid notification datetime: $nt (removed)")
             }
         }
 
-        fixedNotifications = fixedNotifications.toSet().toMutableList()
-        fixedNotifications.sort()
+        // Deduplicate and sort
+        val dedup = fixedList.toSet().toMutableList()
+        dedup.sort()
 
-        if (eventTime != null && !fixedNotifications.contains(eventTime)) {
-            fixedNotifications.add(eventTime)
-            fixedNotifications.sort()
+        // Ensure main event is included
+        if (eventTime != null && !dedup.contains(eventTime)) {
+            dedup.add(eventTime)
+            dedup.sort()
             issues.add("Event datetime was missing, added automatically")
         }
 
         val fixedAlarm = alarm.copy(
             distance = normalizeDistance(alarm.distance),
-            notification = fixedNotifications.map { it.toString() }
+            notification = dedup.map { it.toString() }
         )
-        return fixedAlarm to (if (issues.isEmpty()) listOf("✅ Alarm is valid") else issues)
+        return fixedAlarm to if (issues.isEmpty()) listOf("✅ Alarm is valid") else issues
     }
 
     private fun isValidISO(dateTime: String): Boolean = try {
         OffsetDateTime.parse(dateTime); true
-    } catch (_: DateTimeParseException) { false }
+    } catch (_: DateTimeParseException) {
+        false
+    }
 
     private fun normalizeDistance(distance: String?): String? {
         if (distance == null) return null
         val lower = distance.lowercase(Locale.getDefault()).trim()
         return when {
-            lower.contains("km") -> {
+            "km" in lower -> {
                 val value = lower.replace("km", "").trim().toDoubleOrNull()
                 if (value != null) "%.2f KM".format(value) else distance
             }
-            lower.contains("meter") || lower.contains("m ") -> {
+            "meter" in lower || "m " in lower || lower == "m" -> {
                 val value = lower.replace(Regex("[^0-9.]"), "").toDoubleOrNull()
                 if (value != null) "%.2f KM".format(value / 1000.0) else distance
             }
-            lower.contains("mile") -> {
+            "mile" in lower || "mi" in lower -> {
                 val value = lower.replace(Regex("[^0-9.]"), "").toDoubleOrNull()
                 if (value != null) "%.2f KM".format(value * 1.60934) else distance
             }
-            lower.contains("feet") || lower.contains("ft") -> {
+            "feet" in lower || "ft" in lower -> {
                 val value = lower.replace(Regex("[^0-9.]"), "").toDoubleOrNull()
                 if (value != null) "%.2f KM".format(value / 3280.84) else distance
             }

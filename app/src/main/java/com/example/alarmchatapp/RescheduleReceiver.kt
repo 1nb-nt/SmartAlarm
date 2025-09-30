@@ -10,20 +10,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class RescheduleReceiver : BroadcastReceiver() {
-
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
         Log.d("RescheduleReceiver", "onReceive action=$action")
 
-        // Use goAsync so the process can keep running while suspend Room calls finish.[1]
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val dao = AppDatabase.getDatabase(context).alarmDao()
-                // Use your suspend DAO
-                val alarms = dao.getAll() // suspend fun getAll(): List<Alarm>
+                val alarms = dao.getAll()
                 val now = System.currentTimeMillis()
-
                 var restored = 0
                 alarms.forEach { a ->
                     if (a.triggerTimeMillis > now) {
@@ -36,7 +32,7 @@ class RescheduleReceiver : BroadcastReceiver() {
                         restored++
                     }
                 }
-                Log.d("RescheduleReceiver", "Restored $restored alarms (future ones rescheduled).")
+                Log.d("RescheduleReceiver", "Restored $restored alarms; future ones rescheduled.")
             } catch (e: Exception) {
                 Log.e("RescheduleReceiver", "Failed to restore alarms", e)
             } finally {

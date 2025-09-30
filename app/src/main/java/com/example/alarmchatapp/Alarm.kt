@@ -5,10 +5,9 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "alarms")
 data class Alarm(
-    @PrimaryKey(autoGenerate = true)
-    val id: Int = 0,
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val message: String,
     val triggerTimeMillis: Long,
-    val isRecurring: Boolean,
-    val recurringDays: List<Int>? // stored via TypeConverter
+    val isRecurring: Boolean = false,
+    val recurringDays: List<Int>? = null
 )

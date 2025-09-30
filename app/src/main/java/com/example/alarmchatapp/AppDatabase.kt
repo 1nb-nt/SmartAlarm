@@ -8,16 +8,17 @@ import androidx.room.TypeConverters
 
 @Database(
     entities = [
-        ScheduledTask::class,   // keep if this entity exists in the project
         Alarm::class
+        // If ScheduledTask exists in this project, re-add it here and provide its DAO.
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
-@TypeConverters(Converters::class) // register all converters for the DB scope
+@TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
-    abstract fun scheduledTaskDao(): ScheduledTaskDao
+
     abstract fun alarmDao(): AlarmDao
+    // abstract fun scheduledTaskDao(): ScheduledTaskDao // uncomment if entity is included
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -29,6 +30,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "app_database"
                 )
+                    // For development iteration; swap for .addMigrations(...) in production
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { INSTANCE = it }

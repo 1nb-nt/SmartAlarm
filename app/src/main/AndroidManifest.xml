@@ -3,22 +3,35 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="com.example.alarmchatapp">
 
+    <!-- Core permissions -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- USE_FULL_SCREEN_INTENT is not a dangerous permission; keep for clarity -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+    <!-- Network/location (used by Chat/API/location utils) -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
-    <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Optional legacy SET_ALARM (not required for AlarmClockInfo, keep harmless) -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
+    <!-- Query popular OEM clock apps if needed by integration -->
     <queries>
-        <!-- For launching Google Maps via Intent -->
-        <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.google.android.deskclock" />
+        <package android:name="com.android.deskclock" />
+        <package android:name="com.sec.android.app.clockpackage" />
+        <package android:name="com.miui.clock" />
+        <package android:name="com.coloros.alarmclock" />
+        <package android:name="com.oneplus.deskclock" />
+        <package android:name="com.huawei.deskclock" />
+        <package android:name="com.vivo.alarmclock" />
     </queries>
+
     <application
         android:name=".MyApp"
         android:allowBackup="true"
@@ -29,39 +42,62 @@
         android:theme="@style/Theme.AlarmChatApp"
         android:usesCleartextTraffic="true">
 
-        <activity android:name=".MainActivity" android:exported="true">
+        <!-- Launcher -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
             <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
 
-        <activity android:name=".AlarmActivity" android:exported="false" android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true" android:launchMode="singleInstance" android:taskAffinity="" android:theme="@style/Theme.AlarmChatApp" android:screenOrientation="fullSensor" />
+        <!-- Full-screen ringing UI -->
+        <activity
+            android:name=".AlarmActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.AlarmChatApp"
+            android:screenOrientation="fullSensor" />
 
+        <!-- Alarm trigger receiver (internal broadcast from AlarmManager) -->
         <receiver
             android:name=".AlarmReceiver"
             android:enabled="true"
-            android:exported="true"
-        android:permission="android.permission.WAKE_LOCK">
-        <intent-filter>
-            <action android:name="com.example.alarmchatapp.ALARM_TRIGGERED" />
-        </intent-filter>
-    </receiver>
+            android:exported="false"
+            android:permission="android.permission.WAKE_LOCK" />
 
+        <!-- Restore/reschedule on boot, locked boot, and package replace -->
         <receiver
             android:name=".AlarmHandlerReceiver"
             android:enabled="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.PACKAGE_REPLACED"/>
             </intent-filter>
         </receiver>
 
+        <!-- Optional manual rescheduler (invoked internally via sendBroadcast) -->
         <receiver
-            android:name=".DismissReceiver"
+            android:name=".RescheduleReceiver"
+            android:enabled="true"
             android:exported="false" />
 
-
+        <!-- Notification action to dismiss alarm -->
+        <receiver
+            android:name=".DismissReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.alarmchatapp.ACTION_DISMISS"/>
+            </intent-filter>
+        </receiver>
 
     </application>
 </manifest>
