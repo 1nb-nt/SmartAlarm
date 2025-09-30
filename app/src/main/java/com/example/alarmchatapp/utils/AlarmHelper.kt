@@ -23,11 +23,7 @@ object AlarmHelper {
     ) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
-            Toast.makeText(
-                context,
-                "Allow exact alarms in settings to schedule.",
-                Toast.LENGTH_LONG
-            ).show()
+            Toast.makeText(context, "Allow exact alarms in settings to schedule.", Toast.LENGTH_LONG).show()
             try {
                 context.startActivity(
                     Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
@@ -35,9 +31,8 @@ object AlarmHelper {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                 )
-            } catch (_: Exception) {
-            }
-            return
+            } catch (_: Exception) { }
+            // Do NOT return; proceed to schedule with setAlarmClock so it still fires
         }
 
         val fire = Intent(context, AlarmReceiver::class.java).apply {

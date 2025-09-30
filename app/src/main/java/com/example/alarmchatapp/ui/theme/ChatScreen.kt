@@ -86,7 +86,6 @@ fun ChatScreen(onShow: () -> Unit) {
         val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // Optionally request POST_NOTIFICATIONS on Android 13+
-            // perms += Manifest.permission.POST_NOTIFICATIONS
         }
         permissionLauncher.launch(perms.toTypedArray())
     }
@@ -149,13 +148,28 @@ private fun WowLogoWithSpinner(isProcessing: Boolean, logoSize: Dp, clockOverlay
 private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) {
     if (!isProcessing) return
     val infinite = rememberInfiniteTransition(label = "clock-spin")
-    val angle by infinite.animateFloat(0f, 360f, animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing)), label = "angle")
-    Canvas(modifier = Modifier.size(sizeDp).graphicsLayer { rotationZ = angle }) {
-        val c = this.center
-        val r = this.size.minDimension / 2f
-        drawLine(Color(0xFF6A1B9A), c, c.copy(y = c.y - r * 0.65f), strokeWidth = 6f, cap = StrokeCap.Round)
-        drawLine(Color(0xFF424242), c, c.copy(y = c.y - r * 0.45f), strokeWidth = 4f, cap = StrokeCap.Round)
-        drawCircle(Color(0xFF424242), radius = 6f, center = c)
+    val angle by infinite.animateFloat(
+        0f, 360f,
+        animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing)),
+        label = "angle"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(sizeDp)
+            .graphicsLayer {
+                rotationZ = angle
+                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0.5f)
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val c = center
+            val r = size.minDimension / 2f
+            drawLine(Color(0xFF6A1B9A), c, c.copy(y = c.y - r * 0.65f), strokeWidth = 6f, cap = StrokeCap.Round)
+            drawLine(Color(0xFF424242), c, c.copy(y = c.y - r * 0.45f), strokeWidth = 4f, cap = StrokeCap.Round)
+            drawCircle(Color(0xFF424242), radius = 6f, center = c)
+        }
     }
 }
 
@@ -237,7 +251,6 @@ fun InputSection(
                 try {
                     onProcessingChange(true)
 
-                    // Build payload with today's date and IANA timezone
                     val zone = ZoneId.systemDefault()
                     val todayDmy = LocalDate.now(zone).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
                     val ianaId = zone.id
@@ -276,10 +289,13 @@ fun InputSection(
                     Log.d("AlarmParser", "fixed.notification=${fixed.notification}")
                     issues.forEach { Log.d("AlarmParser", it) }
 
-                    val title = (fixed.title ?: "").ifBlank { "Alarm" }
-// If the backend also returns a natural language explanation inside the JSON
-// consider adding a field to AlarmContract and wiring it here. For now, skip.
+                    // Show server conversational response as left-side bubble, if present
+                    val assistantReply = fixed.responseText?.trim().orEmpty()
+                    if (assistantReply.isNotEmpty()) {
+                        messages.add(0, ChatMessage(assistantReply, Sender.App))
+                    }
 
+                    val title = (fixed.title ?: "").ifBlank { "Alarm" }
 
                     var isoList: List<String> = fixed.notification
                     if (isoList.isEmpty() && !fixed.datetime.isNullOrBlank()) {
@@ -348,11 +364,9 @@ fun InputSection(
                         val timeRegex = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE)
                         val mr = timeRegex.find(lower)
                         if (mr != null) {
-                            val hourStr = mr.groupValues.getOrNull(1)
-                            val minStr = mr.groupValues.getOrNull(2).orEmpty().ifBlank { "0" }
+                            val h = mr.groupValues.getOrNull(1)?.toIntOrNull()
+                            val min = mr.groupValues.getOrNull(2).orEmpty().ifBlank { "0" }.toIntOrNull()
                             val ampmStr = mr.groupValues.getOrNull(3)?.lowercase(Locale.getDefault())
-                            val h = hourStr?.toIntOrNull()
-                            val min = minStr.toIntOrNull()
                             if (h != null && min != null && h in 0..23 && min in 0..59) {
                                 var hour24 = h
                                 if (ampmStr == "pm" && h in 1..11) hour24 = h + 12
@@ -376,7 +390,6 @@ fun InputSection(
                         return@launch
                     }
 
-                    // Convert ISO -> future epoch millis
                     val nowMs = System.currentTimeMillis()
                     val times: List<Long> = isoList.mapNotNull { iso ->
                         runCatching { java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrNull()
@@ -386,16 +399,15 @@ fun InputSection(
                         return@launch
                     }
 
-                    // Persist and schedule with AlarmClock path (user-visible, doze-safe)
                     val dao = AppDatabase.getDatabase(context).alarmDao()
                     var scheduled = 0
                     for (whenMillis in times) {
                         val row = Alarm(
-                            id = 0,
                             message = title,
                             triggerTimeMillis = whenMillis,
                             isRecurring = false,
-                            recurringDays = null
+                            recurringDays = null,
+                            initialNote = assistantReply.ifBlank { fixed.responseText } // pass to AlarmActivity marquee
                         )
                         val newId = dao.insert(row).toInt()
                         AlarmHelper.scheduleAlarmClockPublic(
@@ -405,9 +417,7 @@ fun InputSection(
                             alarmId = newId
                         )
                         scheduled++
-                        messages.add(0, ChatMessage("Armed for ${Date(whenMillis)}", Sender.App))
                     }
-                    messages.add(0, ChatMessage("Scheduled $scheduled alarm(s).", Sender.App))
                 } catch (e: Exception) {
                     Log.e("ChatScreen", "Error", e)
                     messages.add(0, ChatMessage("Failed: ${e.localizedMessage ?: "Unknown error"}", Sender.App))

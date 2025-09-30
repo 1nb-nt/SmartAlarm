@@ -7,7 +7,8 @@ import androidx.work.WorkerParameters
 import com.example.alarmchatapp.utils.AlarmHelper
 import java.util.Calendar
 
-class MyAlarmSetWorker(
+class
+MyAlarmSetWorker(
     appContext: Context,
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {

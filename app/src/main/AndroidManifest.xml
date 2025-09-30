@@ -8,8 +8,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- USE_FULL_SCREEN_INTENT is not a dangerous permission; keep for clarity -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
 
     <!-- Network/location (used by Chat/API/location utils) -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -17,10 +18,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- Optional legacy SET_ALARM (not required for AlarmClockInfo, keep harmless) -->
+    <!-- Optional legacy SET_ALARM (not required for AlarmClockInfo) -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
-    <!-- Query popular OEM clock apps if needed by integration -->
     <queries>
         <package android:name="com.google.android.deskclock" />
         <package android:name="com.android.deskclock" />
@@ -42,7 +42,6 @@
         android:theme="@style/Theme.AlarmChatApp"
         android:usesCleartextTraffic="true">
 
-        <!-- Launcher -->
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -64,14 +63,14 @@
             android:theme="@style/Theme.AlarmChatApp"
             android:screenOrientation="fullSensor" />
 
-        <!-- Alarm trigger receiver (internal broadcast from AlarmManager) -->
+        <!-- Internal alarm broadcast target -->
         <receiver
             android:name=".AlarmReceiver"
             android:enabled="true"
             android:exported="false"
             android:permission="android.permission.WAKE_LOCK" />
 
-        <!-- Restore/reschedule on boot, locked boot, and package replace -->
+        <!-- Restore/reschedule on boot and package replace -->
         <receiver
             android:name=".AlarmHandlerReceiver"
             android:enabled="true"
@@ -83,7 +82,7 @@
             </intent-filter>
         </receiver>
 
-        <!-- Optional manual rescheduler (invoked internally via sendBroadcast) -->
+        <!-- Optional internal rescheduler -->
         <receiver
             android:name=".RescheduleReceiver"
             android:enabled="true"

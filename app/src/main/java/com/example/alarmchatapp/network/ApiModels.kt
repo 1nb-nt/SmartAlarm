@@ -22,5 +22,7 @@ data class AlarmApiResponse(
     val timezone: String?,        // e.g. "Asia/Kolkata"
     val recurrence: String?,      // e.g. "daily" / "weekly" / "yearly"
     @SerializedName("ex_days") val exDays: List<String>?,
+    val initial_note: String?,
+    val response: String?,
     val notification: List<String> // ISO times or can be empty
 )
