@@ -63,6 +63,12 @@ import java.time.ZoneId
 import java.util.Calendar
 import java.util.Locale
 
+// ADDED: imports for persistence
+import kotlinx.coroutines.Dispatchers // ADDED
+import kotlinx.coroutines.withContext // ADDED
+import com.example.alarmchatapp.chatroom.ChatMessageEntity // ADDED
+import com.example.alarmchatapp.chatroom.ChatDao // ADDED
+
 enum class Sender { User, App }
 data class ChatMessage(val text: String, val sender: Sender)
 
@@ -83,6 +89,10 @@ fun ChatScreen(onShow: () -> Unit) {
     var input by remember { mutableStateOf(TextFieldValue()) }
     var isProcessing by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+
+    // ADDED: DB and DAO for chat persistence
+    val db = remember { AppDatabase.getDatabase(context) } // ADDED
+    val chatDao: ChatDao = remember { db.chatDao() } // ADDED
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -107,6 +117,16 @@ fun ChatScreen(onShow: () -> Unit) {
         }
         permissionLauncher.launch(perms.toTypedArray())
 
+        // ADDED: Load last 24h chat from Room, then seed if empty
+        val now = System.currentTimeMillis() // ADDED
+        val last24 = withContext(Dispatchers.IO) { // ADDED
+            chatDao.lastSince(now - 24L * 60L * 60L * 1000L) // ADDED
+        } // ADDED
+        if (last24.isNotEmpty()) { // ADDED
+            messages.clear() // ADDED
+            messages.addAll(last24.map { ChatMessage(it.text, if (it.sender == "User") Sender.User else Sender.App) }) // ADDED
+        } // ADDED
+
         if (messages.isEmpty()) {
             messages.add(
                 0,
@@ -115,6 +135,12 @@ fun ChatScreen(onShow: () -> Unit) {
                     Sender.App
                 )
             )
+
+            // ADDED: persist welcome once
+            withContext(Dispatchers.IO) {
+                chatDao.insert(ChatMessageEntity(text = "HELLO THERE", sender = "App", timeMillis = System.currentTimeMillis()))
+                chatDao.pruneOlderThan(now - 7L * 24L * 60L * 60L * 1000L) // housekeeping
+            }
         }
     }
 
@@ -147,6 +173,18 @@ fun ChatScreen(onShow: () -> Unit) {
             scope = scope,
             context = context,
             messages = messages,
+            // ADDED: persist every bubble from here
+            onPersist = { uiMsg ->
+                scope.launch(Dispatchers.IO) {
+                    chatDao.insert(
+                        ChatMessageEntity(
+                            text = uiMsg.text,
+                            sender = uiMsg.sender.name,
+                            timeMillis = System.currentTimeMillis()
+                        )
+                    )
+                }
+            },
             modifier = Modifier.navigationBarsPadding().padding(bottom = 8.dp),
             onProcessingChange = { isProcessing = it }
         )
@@ -357,6 +395,7 @@ fun InputSection(
     scope: CoroutineScope,
     context: Context,
     messages: MutableList<ChatMessage>,
+    onPersist: (ChatMessage) -> Unit, // ADDED
     modifier: Modifier = Modifier,
     onProcessingChange: (Boolean) -> Unit = {}
 ) {
@@ -373,7 +412,10 @@ fun InputSection(
             val rawText = input.text.trim()
             if (rawText.isEmpty()) return@IconButton
 
-            messages.add(0, ChatMessage(rawText, Sender.User))
+            val userMsg = ChatMessage(rawText, Sender.User) // ADDED (local var)
+            messages.add(0, userMsg)
+            onPersist(userMsg) // ADDED
+
             onInputChange(TextFieldValue(""))
 
             scope.launch {
@@ -400,18 +442,24 @@ fun InputSection(
                     if (!http.isSuccessful) {
                         messages.add(0, ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
                         messages.add(0, ChatMessage("Retry ▶", Sender.App))
+                        // ADDED: persist error/info
+                        onPersist(ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
+                        onPersist(ChatMessage("Retry ▶", Sender.App))
                         return@launch
                     }
                     val bodyStr = http.body()?.string().orEmpty()
                     if (bodyStr.isBlank()) {
                         messages.add(0, ChatMessage("No response received. Tap to retry.", Sender.App))
                         messages.add(0, ChatMessage("Retry ▶", Sender.App))
+                        onPersist(ChatMessage("No response received. Tap to retry.", Sender.App)) // ADDED
+                        onPersist(ChatMessage("Retry ▶", Sender.App)) // ADDED
                         return@launch
                     }
 
                     val innerJson = extractInnerJsonFromResponse(bodyStr)
                     if (innerJson == null) {
                         messages.add(0, ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
+                        onPersist(ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App)) // ADDED
                         return@launch
                     }
 
@@ -423,7 +471,9 @@ fun InputSection(
 
                     val assistantReply = fixed.responseText?.trim().orEmpty()
                     if (assistantReply.isNotEmpty()) {
-                        messages.add(0, ChatMessage(assistantReply, Sender.App))
+                        val appMsg = ChatMessage(assistantReply, Sender.App) // ADDED
+                        messages.add(0, appMsg)
+                        onPersist(appMsg) // ADDED
                     }
 
                     val title = (fixed.title ?: "").ifBlank { "Alarm" }
@@ -518,6 +568,7 @@ fun InputSection(
 
                     if (isoList.isEmpty()) {
                         messages.add(0, ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
+                        onPersist(ChatMessage("No times from API or text; nothing scheduled.", Sender.App)) // ADDED
                         return@launch
                     }
 
@@ -527,6 +578,7 @@ fun InputSection(
                     }.filter { it > nowMs }.distinct().sorted()
                     if (times.isEmpty()) {
                         messages.add(0, ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
+                        onPersist(ChatMessage("No future times after validation; nothing scheduled.", Sender.App)) // ADDED
                         return@launch
                     }
 
@@ -555,7 +607,9 @@ fun InputSection(
                     }
                 } catch (e: Exception) {
                     Log.e("ChatScreen", "Error", e)
-                    messages.add(0, ChatMessage("Failed: ${e.localizedMessage ?: "Unknown error"}", Sender.App))
+                    val err = ChatMessage("Failed: ${e.localizedMessage ?: "Unknown error"}", Sender.App) // ADDED
+                    messages.add(0, err)
+                    onPersist(err) // ADDED
                 } finally {
                     onProcessingChange(false)
                 }

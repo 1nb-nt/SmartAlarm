@@ -171,12 +171,12 @@ class AlarmActivity : ComponentActivity() {
         val saved = prefs.getString("ringtone_uri", null)
         val preferredUri: Uri? = saved?.let { runCatching { Uri.parse(it) }.getOrNull() }
 
-        val uri = preferredUri
+        // Prefer user‑selected Uri; fallback to system defaults only if null or play fails
+        val chosenUri = preferredUri
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
 
-        // Start ringtone with proper attributes; guard with try/catch in case Uri is stale
-        ringtone = runCatching { RingtoneManager.getRingtone(this, uri) }.getOrNull()?.apply {
+        ringtone = runCatching { RingtoneManager.getRingtone(this, chosenUri) }.getOrNull()?.apply {
             runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) isLooping = true
                 audioAttributes = AudioAttributes.Builder()
@@ -185,10 +185,15 @@ class AlarmActivity : ComponentActivity() {
                     .build()
                 play()
             }.onFailure {
-                // If play fails, attempt fallback default
+                // If user-picked Uri failed, try a pure default as last resort
                 val fallback = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
                 runCatching { RingtoneManager.getRingtone(this@AlarmActivity, fallback) }
-                    .onSuccess { it?.apply { audioAttributes = audioAttributes; play() } }
+                    .onSuccess { fb ->
+                        fb?.apply {
+                            audioAttributes = this@apply.audioAttributes
+                            play()
+                        }
+                    }
             }
         }
 
