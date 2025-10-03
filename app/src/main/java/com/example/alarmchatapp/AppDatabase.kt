@@ -5,19 +5,23 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import com.example.alarmchatapp.chatroom.ChatDao
+import com.example.alarmchatapp.chatroom.ChatMessageEntity
 
 @Database(
     entities = [
-        Alarm::class
+        Alarm::class,
+        ChatMessageEntity::class
         // If ScheduledTask exists in this project, re-add it here and provide its DAO.
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun alarmDao(): AlarmDao
+    abstract fun chatDao(): ChatDao
     // abstract fun scheduledTaskDao(): ScheduledTaskDao // uncomment if entity is included
 
     companion object {

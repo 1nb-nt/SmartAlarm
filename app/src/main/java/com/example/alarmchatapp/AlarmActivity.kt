@@ -25,6 +25,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.alarmchatapp.utils.AlarmHelper
 
 class AlarmActivity : ComponentActivity() {
 
@@ -77,9 +79,10 @@ class AlarmActivity : ComponentActivity() {
 
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
 
-        // If receiver already started ringing, adopt it; otherwise start here.
+        // Start or adopt shared audio objects
         if (AlarmAudio.ringtone == null || AlarmAudio.vibrator == null) {
             requestAlarmAudioFocus()
+            setAlarmVolumeLoud()
             startRingingAndVibrating()
             AlarmAudio.ringtone = ringtone
             AlarmAudio.vibrator = vibrator
@@ -88,6 +91,7 @@ class AlarmActivity : ComponentActivity() {
             vibrator = AlarmAudio.vibrator
         }
 
+        // Register stop receiver (for notification dismiss action)
         val filter = IntentFilter("com.example.alarmchatapp.ACTION_STOP_RING")
         val registered = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -104,6 +108,18 @@ class AlarmActivity : ComponentActivity() {
                 message = message,
                 initialNote = initialNote,
                 onDismiss = {
+                    stopRinging()
+                    finish()
+                },
+                onSnooze = {
+                    // Simple 5‑minute snooze using the same label
+                    val trigger = System.currentTimeMillis() + 5 * 60_000
+                    AlarmHelper.scheduleAlarmClockPublic(
+                        context = this,
+                        label = message,
+                        triggerAt = trigger,
+                        alarmId = 0 // new alarm row not persisted here; adjust if you want to store
+                    )
                     stopRinging()
                     finish()
                 }
@@ -132,21 +148,48 @@ class AlarmActivity : ComponentActivity() {
             am.requestAudioFocus(afr)
         } else {
             @Suppress("DEPRECATION")
-            am.requestAudioFocus(null, AudioManager.STREAM_ALARM,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+            am.requestAudioFocus(
+                null,
+                AudioManager.STREAM_ALARM,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
+            )
         }
     }
 
+    private fun setAlarmVolumeLoud() {
+        val am = audioManager ?: return
+        @Suppress("DEPRECATION")
+        am.setStreamVolume(
+            AudioManager.STREAM_ALARM,
+            am.getStreamMaxVolume(AudioManager.STREAM_ALARM),
+            0
+        )
+    }
+
     private fun startRingingAndVibrating() {
-        val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        val prefs = getSharedPreferences("wow_prefs", MODE_PRIVATE)
+        val saved = prefs.getString("ringtone_uri", null)
+        val preferredUri: Uri? = saved?.let { runCatching { Uri.parse(it) }.getOrNull() }
+
+        val uri = preferredUri
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-        ringtone = RingtoneManager.getRingtone(this, uri)?.apply {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) isLooping = true
-            audioAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            play()
+
+        // Start ringtone with proper attributes; guard with try/catch in case Uri is stale
+        ringtone = runCatching { RingtoneManager.getRingtone(this, uri) }.getOrNull()?.apply {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) isLooping = true
+                audioAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+                play()
+            }.onFailure {
+                // If play fails, attempt fallback default
+                val fallback = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                runCatching { RingtoneManager.getRingtone(this@AlarmActivity, fallback) }
+                    .onSuccess { it?.apply { audioAttributes = audioAttributes; play() } }
+            }
         }
 
         vibrator = getSystemService(Vibrator::class.java)
@@ -164,10 +207,12 @@ class AlarmActivity : ComponentActivity() {
         AlarmAudio.ringtone = null
         runCatching { AlarmAudio.vibrator?.cancel() }
         AlarmAudio.vibrator = null
+
         runCatching { ringtone?.stop() }
         ringtone = null
         runCatching { vibrator?.cancel() }
         vibrator = null
+
         abandonAlarmAudioFocus()
     }
 
@@ -192,7 +237,8 @@ class AlarmActivity : ComponentActivity() {
 fun AlarmScreen(
     message: String,
     initialNote: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onSnooze: () -> Unit
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
         Column(
@@ -205,8 +251,11 @@ fun AlarmScreen(
                 Spacer(modifier = Modifier.height(24.dp))
             }
             Text(text = message, color = Color.White, fontSize = 30.sp)
-            Spacer(modifier = Modifier.height(40.dp))
-            Button(onClick = onDismiss) { Text("Dismiss") }
+            Spacer(modifier = Modifier.height(28.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedButton(onClick = onSnooze) { Text("Snooze 5 min") }
+                Button(onClick = onDismiss) { Text("Dismiss") }
+            }
         }
     }
 }

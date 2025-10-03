@@ -2,6 +2,9 @@ package com.example.alarmchatapp.ui
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import android.widget.Toast
@@ -32,9 +35,13 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -51,11 +58,9 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import java.time.LocalDate
+import java.time.OffsetDateTime
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import java.util.Calendar
-import java.util.Date
 import java.util.Locale
 
 enum class Sender { User, App }
@@ -77,33 +82,64 @@ fun ChatScreen(onShow: () -> Unit) {
     val messages = remember { mutableStateListOf<ChatMessage>() }
     var input by remember { mutableStateOf(TextFieldValue()) }
     var isProcessing by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {}
 
+    // Ringtone picker launcher
+    val pickSound = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { res ->
+        val uri: Uri? = res.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        if (uri != null) {
+            context.getSharedPreferences("wow_prefs", Context.MODE_PRIVATE)
+                .edit().putString("ringtone_uri", uri.toString()).apply()
+            Toast.makeText(context, "Alarm sound set", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     LaunchedEffect(Unit) {
         val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Optionally request POST_NOTIFICATIONS on Android 13+
+            // Optionally request POST_NOTIFICATIONS
         }
         permissionLauncher.launch(perms.toTypedArray())
+
+        if (messages.isEmpty()) {
+            messages.add(
+                0,
+                ChatMessage(
+                    "HELLO THERE",
+                    Sender.App
+                )
+            )
+        }
     }
 
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        TopBar(onShow)
-        Spacer(Modifier.width(0.dp))
-
-        OldUiButtons(
-            onCommandClick = { command -> input = TextFieldValue(command) },
-            isProcessing = isProcessing
+        TopBar(
+            onShow = onShow,
+            onOpenSettings = { showSettings = true }
         )
 
-        MessageList(messages)
-        Spacer(Modifier.width(0.dp))
+        // Big logo just under TopBar (small logo near settings removed)
+        Spacer(Modifier.height(4.dp))
+        CenterLogo(isProcessing = isProcessing)
+
+        // Header and buttons packed tighter to free more space for chat
+        HeaderAndButtons(
+            onCommandClick = { command -> input = TextFieldValue(command) }
+        )
+
+        // Chat list takes remaining space
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            MessageList(messages)
+        }
 
         InputSection(
             input = input,
@@ -115,24 +151,111 @@ fun ChatScreen(onShow: () -> Unit) {
             onProcessingChange = { isProcessing = it }
         )
     }
+
+    if (showSettings) {
+        SettingsSheet(
+            onDismiss = { showSettings = false },
+            onChooseSound = {
+                val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                    putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+                    putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select alarm sound")
+                    putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                    putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                }
+                pickSound.launch(intent)
+            },
+            onShare = {
+                val share = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, "Wake smarter with WOW Alarm – natural language alarms and reminders that really work. Try it today!")
+                }
+                context.startActivity(Intent.createChooser(share, "Share WOW Alarm"))
+            },
+            onInvite = {
+                val invite = Intent(Intent.ACTION_SENDTO).apply {
+                    data = Uri.parse("mailto:")
+                    putExtra(Intent.EXTRA_SUBJECT, "Join me on WOW Alarm")
+                    putExtra(Intent.EXTRA_TEXT, "I’ve been using WOW Alarm for smart wake-ups and reminders. Install it and I’ll share my templates!")
+                }
+                runCatching { context.startActivity(invite) }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsSheet(
+    onDismiss: () -> Unit,
+    onChooseSound: () -> Unit,
+    onShare: () -> Unit,
+    onInvite: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Text("Settings", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = onChooseSound, modifier = Modifier.fillMaxWidth()) {
+                Text("Choose alarm sound")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onShare, modifier = Modifier.fillMaxWidth()) {
+                Text("Share")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onInvite, modifier = Modifier.fillMaxWidth()) {
+                Text("Invite")
+            }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                Text("Close")
+            }
+        }
+    }
 }
 
 @Composable
-fun OldUiButtons(onCommandClick: (String) -> Unit, isProcessing: Boolean) {
+private fun CenterLogo(isProcessing: Boolean) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        WowLogoWithSpinner(isProcessing = isProcessing, logoSize = 200.dp, clockOverlaySize = 72.dp)
+    }
+}
+
+@Composable
+private fun HeaderAndButtons(onCommandClick: (String) -> Unit) {
     Column(
-        Modifier.fillMaxWidth().padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
     ) {
-        WowLogoWithSpinner(isProcessing = isProcessing, logoSize = 200.dp, clockOverlaySize = 112.dp)
-        Spacer(Modifier.width(0.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = { onCommandClick("Set an alarm at 6 PM") }, modifier = Modifier.weight(1f)) {
-                Text("Wake Up")
+        val gradient = androidx.compose.ui.graphics.Brush.horizontalGradient(
+            listOf(Color(0xFF6A1B9A), Color.Black)
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = buildAnnotatedString {
+                withStyle(style = SpanStyle(brush = gradient)) {
+                    append("Welcome to WOW Alarm! Try:\n- Wake me up at 5 AM daily\n- Call mom every Friday at 7 PM\n- Meeting tomorrow 3 PM\n- Son's birthday on Oct 24; remind a week before")
+                }
+            },
+            fontSize = 18.sp
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Button(onClick = { onCommandClick("Wake me up at 6 AM") }, modifier = Modifier.weight(1f)) {
+                Text("Wake‑up Alarm")
             }
             Button(onClick = { onCommandClick("Remind me at 9 PM daily") }, modifier = Modifier.weight(1f)) {
-                Text("Remind Me")
+                Text("Repeat Alarm")
+            }
+            Button(onClick = { onCommandClick("Event reminder tomorrow 3 PM") }, modifier = Modifier.weight(1f)) {
+                Text("Event Reminder")
             }
         }
+        Spacer(Modifier.height(6.dp))
     }
 }
 
@@ -153,14 +276,10 @@ private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) {
         animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing)),
         label = "angle"
     )
-
     Box(
         modifier = Modifier
             .size(sizeDp)
-            .graphicsLayer {
-                rotationZ = angle
-                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0.5f)
-            },
+            .graphicsLayer { rotationZ = angle },
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -174,31 +293,41 @@ private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) {
 }
 
 @Composable
-fun TopBar(onShow: () -> Unit) {
+fun TopBar(onShow: () -> Unit, onOpenSettings: () -> Unit) {
     val ctx = LocalContext.current
     Row(
-        Modifier.fillMaxWidth().padding(10.dp),
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 24.dp)
+            .heightIn(min = 44.dp)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(Modifier.clickable { Toast.makeText(ctx, "Settings clicked", Toast.LENGTH_SHORT).show() }) {
+        // Small logo near settings removed; only settings icon remains
+        Row(Modifier.clickable { onOpenSettings() }) {
             Icon(Icons.Filled.Settings, contentDescription = "Settings")
-            Spacer(Modifier.width(8.dp))
-            Text("Alarm App")
         }
         Spacer(Modifier.weight(1f))
-        Button(onClick = onShow) { Text("Manage") }
+        Button(onClick = onShow, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)) {
+            Text("Manage")
+        }
     }
 }
 
 @Composable
 fun MessageList(messages: List<ChatMessage>) {
     LazyColumn(
-        Modifier.fillMaxWidth().heightIn(max = 280.dp).padding(horizontal = 12.dp),
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .fillMaxHeight(),
         reverseLayout = true
     ) {
         items(messages) { msg ->
             Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp),
                 horizontalArrangement = if (msg.sender == Sender.User) Arrangement.End else Arrangement.Start
             ) {
                 MessageBubble(text = msg.text, isUser = msg.sender == Sender.User)
@@ -237,7 +366,7 @@ fun InputSection(
             onValueChange = onInputChange,
             modifier = Modifier.weight(1f),
             singleLine = true,
-            placeholder = { Text("Type alarm/reminder command") }
+            placeholder = { Text("What should i remind you about ?") }
         )
         Spacer(Modifier.width(8.dp))
         IconButton(onClick = {
@@ -252,11 +381,12 @@ fun InputSection(
                     onProcessingChange(true)
 
                     val zone = ZoneId.systemDefault()
-                    val todayDmy = LocalDate.now(zone).format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
                     val ianaId = zone.id
+                    val nowOffset = OffsetDateTime.now(zone).toString()
+                    // WOW format: "Current datetime <ISO_OFFSET> <IANA>"
                     val augmentedUserInput = buildString {
-                        append(rawText).append(' ')
-                        append("Today's date is $todayDmy and the timezone is IST ($ianaId)")
+                        append("Current datetime ").append(nowOffset).append(' ').append(ianaId).append("\n\n")
+                        append(rawText)
                     }
 
                     val payload: Map<String, Any> = mapOf(
@@ -268,12 +398,14 @@ fun InputSection(
 
                     val http = RetrofitClient.instance.getAlarmDetailsRaw(payload)
                     if (!http.isSuccessful) {
-                        messages.add(0, ChatMessage("API failed: ${http.code()}", Sender.App))
+                        messages.add(0, ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
+                        messages.add(0, ChatMessage("Retry ▶", Sender.App))
                         return@launch
                     }
                     val bodyStr = http.body()?.string().orEmpty()
                     if (bodyStr.isBlank()) {
-                        messages.add(0, ChatMessage("API failed: empty body", Sender.App))
+                        messages.add(0, ChatMessage("No response received. Tap to retry.", Sender.App))
+                        messages.add(0, ChatMessage("Retry ▶", Sender.App))
                         return@launch
                     }
 
@@ -289,7 +421,6 @@ fun InputSection(
                     Log.d("AlarmParser", "fixed.notification=${fixed.notification}")
                     issues.forEach { Log.d("AlarmParser", it) }
 
-                    // Show server conversational response as left-side bubble, if present
                     val assistantReply = fixed.responseText?.trim().orEmpty()
                     if (assistantReply.isNotEmpty()) {
                         messages.add(0, ChatMessage(assistantReply, Sender.App))
@@ -322,8 +453,8 @@ fun InputSection(
                         }
                     }
 
-                    // dd/MM/yyyy HH:mm [AM/PM]
                     if (isoList.isEmpty()) {
+                        // dd/MM/yyyy HH:mm [AM/PM]
                         val lower = rawText.lowercase(Locale.getDefault()).replace("on", " ")
                         val dateTimeRegex = Regex(
                             """\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""",
@@ -400,6 +531,7 @@ fun InputSection(
                     }
 
                     val dao = AppDatabase.getDatabase(context).alarmDao()
+                    val assistantReplyOrNote = assistantReply.ifBlank { fixed.responseText.orEmpty() }
                     var scheduled = 0
                     for (whenMillis in times) {
                         val row = Alarm(
@@ -407,7 +539,7 @@ fun InputSection(
                             triggerTimeMillis = whenMillis,
                             isRecurring = false,
                             recurringDays = null,
-                            initialNote = assistantReply.ifBlank { fixed.responseText } // pass to AlarmActivity marquee
+                            initialNote = assistantReplyOrNote
                         )
                         val newId = dao.insert(row).toInt()
                         AlarmHelper.scheduleAlarmClockPublic(
@@ -417,6 +549,9 @@ fun InputSection(
                             alarmId = newId
                         )
                         scheduled++
+                    }
+                    if (scheduled > 0) {
+
                     }
                 } catch (e: Exception) {
                     Log.e("ChatScreen", "Error", e)
