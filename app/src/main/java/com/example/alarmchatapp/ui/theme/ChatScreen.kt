@@ -205,7 +205,10 @@ fun ChatScreen(onShow: () -> Unit) {
             onShare = {
                 val share = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, "Wake smarter with WOW Alarm – natural language alarms and reminders that really work. Try it today!")
+                    putExtra(Intent.EXTRA_TEXT, "\n" +
+                            "WOW Assist is a great way to keep your timely reminders and the best thing is you can converse in your language. Check it out. \n" +
+                            "\n" +
+                            "https://www.workofwisdomai.com/assist ")
                 }
                 context.startActivity(Intent.createChooser(share, "Share WOW Alarm"))
             },
@@ -213,7 +216,10 @@ fun ChatScreen(onShow: () -> Unit) {
                 val invite = Intent(Intent.ACTION_SENDTO).apply {
                     data = Uri.parse("mailto:")
                     putExtra(Intent.EXTRA_SUBJECT, "Join me on WOW Alarm")
-                    putExtra(Intent.EXTRA_TEXT, "I’ve been using WOW Alarm for smart wake-ups and reminders. Install it and I’ll share my templates!")
+                    putExtra(Intent.EXTRA_TEXT, "I’ve been using WOW Alarm for smart wake-ups and reminders. \n" +
+                            "WOW Assist is a great way to keep your timely reminders and the best thing is you can converse in your language. Check it out. \n" +
+                            "\n" +
+                            "https://www.workofwisdomai.com/assist ")
                 }
                 runCatching { context.startActivity(invite) }
             }
