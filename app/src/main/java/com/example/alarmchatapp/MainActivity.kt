@@ -13,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
+import androidx.core.view.WindowCompat
 import com.example.alarmchatapp.ui.AppContent
 
 class MainActivity : ComponentActivity() {
@@ -32,6 +33,7 @@ class MainActivity : ComponentActivity() {
 
         // 3) Prompt for "Exact alarms" on Android 12+ (don’t block if user declines)
         requestExactAlarmsIfNeeded()
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         setContent {
             AppContent()

@@ -16,4 +16,8 @@ interface ChatDao {
 
     @Query("DELETE FROM chat_messages WHERE timeMillis < :cutoff")
     suspend fun pruneOlderThan(cutoff: Long)
+
+    @Query("DELETE FROM chat_messages WHERE text = :exact")
+    suspend fun deleteByExactText(exact: String)
+
 }

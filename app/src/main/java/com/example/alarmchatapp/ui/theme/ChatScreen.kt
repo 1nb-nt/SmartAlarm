@@ -6,6 +6,7 @@ import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -21,23 +22,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
-import androidx.compose.material3.OutlinedTextFieldDefaults.contentPadding
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -51,7 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -72,12 +70,10 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.util.Calendar
 import java.util.Locale
-
-// ADDED: imports for persistence
-import kotlinx.coroutines.Dispatchers // ADDED
-import kotlinx.coroutines.withContext // ADDED
-import com.example.alarmchatapp.chatroom.ChatMessageEntity // ADDED
-import com.example.alarmchatapp.chatroom.ChatDao // ADDED
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.example.alarmchatapp.chatroom.ChatMessageEntity
+import com.example.alarmchatapp.chatroom.ChatDao
 
 enum class Sender { User, App }
 data class ChatMessage(val text: String, val sender: Sender)
@@ -100,7 +96,10 @@ fun ChatScreen(onShow: () -> Unit) {
     var isProcessing by remember { mutableStateOf(false) }
     var isTyping by remember { mutableStateOf(false) }
 
-    // DB and DAO
+    // Show home again after each attempt finishes
+    var alarmHandled by remember { mutableStateOf(false) }
+    val showHome by remember { derivedStateOf { (!isTyping && !isProcessing) || alarmHandled } }
+
     val db = remember { AppDatabase.getDatabase(context) }
     val chatDao: ChatDao = remember { db.chatDao() }
 
@@ -121,34 +120,31 @@ fun ChatScreen(onShow: () -> Unit) {
 
     LaunchedEffect(Unit) {
         val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // optionally POST_NOTIFICATIONS
-        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { /* optionally POST_NOTIFICATIONS */ }
         permissionLauncher.launch(perms.toTypedArray())
 
         val now = System.currentTimeMillis()
         val last24 = withContext(Dispatchers.IO) { chatDao.lastSince(now - 24L * 60L * 60L * 1000L) }
         if (last24.isNotEmpty()) {
             messages.clear()
-            messages.addAll(last24.map { ChatMessage(it.text, if (it.sender == "User") Sender.User else Sender.App) })
+            // Ensure ascending order oldest -> newest
+            val loaded = last24.map { ChatMessage(it.text, if (it.sender == "User") Sender.User else Sender.App) }
+            messages.addAll(loaded.asReversed())
+            messages.removeAll { it.text.equals("HELLO THERE", true) && it.sender == Sender.App }
         }
         if (messages.isEmpty()) {
-            messages.add(0, ChatMessage("HELLO THERE", Sender.App))
             withContext(Dispatchers.IO) {
-                chatDao.insert(ChatMessageEntity(text = "HELLO THERE", sender = "App", timeMillis = System.currentTimeMillis()))
-                chatDao.pruneOlderThan(now - 7L * 24L * 60L * 60L * 1000L)
+                // prune and purge legacy seed if present
+                chatDao.pruneOlderThan(now - 7L * 24L * 60L * 1000L)
+                runCatching { chatDao.deleteByExactText("HELLO THERE") }
             }
         }
     }
 
-    // Drawer
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val openDrawer = { scope.launch { drawerState.open() } }
     val closeDrawer = { scope.launch { drawerState.close() } }
 
-    val showWelcomeBox by remember { derivedStateOf { !isTyping && !isProcessing } }
-
-    // Drawer width calculation
     val config = LocalConfiguration.current
     val screenWidthDp = config.screenWidthDp.dp
     val drawerTargetWidth: Dp = (screenWidthDp * 0.58f).coerceAtMost(280.dp)
@@ -158,175 +154,150 @@ fun ChatScreen(onShow: () -> Unit) {
         drawerContent = {
             ModalDrawerSheet(
                 modifier = Modifier.width(drawerTargetWidth),
-                windowInsets = WindowInsets(0)
+                windowInsets = WindowInsets.statusBars
             ) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 32.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp)) {
                     Text("WOW Panel", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
-
-                    Text(
-                        "Manage Alarms",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                closeDrawer()
-                                onShow()
+                    Text("Manage Alarms",
+                        modifier = Modifier.fillMaxWidth().clickable { closeDrawer(); onShow() }.padding(vertical = 8.dp))
+                    Text("Choose alarm sound",
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select alarm sound")
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
                             }
-                            .padding(vertical = 8.dp)
-                    )
-
-                    Text(
-                        "Choose alarm sound",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
-                                    putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
-                                    putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select alarm sound")
-                                    putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
-                                    putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
-                                }
-                                pickSound.launch(intent)
-                                closeDrawer()
+                            pickSound.launch(intent); closeDrawer()
+                        }.padding(vertical = 8.dp))
+                    Text("Invite",
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            val invite = Intent(Intent.ACTION_SENDTO).apply {
+                                data = Uri.parse("mailto:")
+                                putExtra(Intent.EXTRA_SUBJECT, "Join me on WOW Assist")
+                                putExtra(Intent.EXTRA_TEXT, "I've been using WOW Assist for smart wake-ups and reminders.\n\nWOW Assist lets conversations in local languages.\n\nhttps://www.workofwisdomai.com/assist")
                             }
-                            .padding(vertical = 8.dp)
-                    )
-
-                    Text(
-                        "Invite",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                val invite = Intent(Intent.ACTION_SENDTO).apply {
-                                    data = Uri.parse("mailto:")
-                                    putExtra(Intent.EXTRA_SUBJECT, "Join me on WOW Alarm")
-                                    putExtra(Intent.EXTRA_TEXT, "I've been using WOW Alarm for smart wake-ups and reminders.\nWOW Assist is a great way to keep your timely reminders and the best thing is you can converse in your language. Check it out.\n\nhttps://www.workofwisdomai.com/assist ")
-                                }
-                                runCatching { context.startActivity(invite) }
-                                closeDrawer()
-                            }
-                            .padding(vertical = 8.dp)
-                    )
+                            runCatching { context.startActivity(invite) }; closeDrawer()
+                        }.padding(vertical = 8.dp))
                 }
             }
         }
     ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-        ) {
-            TopBarWithActions(
-                onToggle = { openDrawer() },
-                onShare = {
-                    val share = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(
-                            Intent.EXTRA_TEXT,
-                            "\nWOW Assist is a great way to keep your timely reminders and the best thing is you can converse in your language. Check it out. \n\nhttps://www.workofwisdomai.com/assist "
-                        )
-                    }
-                    context.startActivity(Intent.createChooser(share, "Share WOW Alarm"))
-                }
-            )
-
-            Box(Modifier.weight(1f)) {
-                ChatScrollableContent(
-                    isProcessing = isProcessing,
-                    showWelcome = showWelcomeBox,
-                    messages = messages,
-                    onCommandClick = { command ->
-                        input = TextFieldValue(command)
-                        isTyping = true
+        Scaffold(
+            topBar = {
+                TopBarWithActions(
+                    onToggle = { openDrawer() },
+                    onShare = {
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT,
+                                "I've been using WOW Assist for smart wake-ups and reminders.\n\nWOW Assist supports your language.\n\nhttps://www.workofwisdomai.com/assist")
+                        }
+                        context.startActivity(Intent.createChooser(share, "Share WOW Assist"))
                     }
                 )
-            }
-
-            InputSection(
-                input = input,
-                onInputChange = {
-                    input = it
-                    isTyping = it.text.isNotBlank()
-                },
-                scope = scope,
-                context = context,
-                messages = messages,
-                onPersist = { uiMsg ->
-                    scope.launch(Dispatchers.IO) {
-                        chatDao.insert(
-                            ChatMessageEntity(
-                                text = uiMsg.text,
-                                sender = uiMsg.sender.name,
-                                timeMillis = System.currentTimeMillis()
-                            )
-                        )
-                    }
-                },
-                modifier = Modifier.navigationBarsPadding().padding(bottom = 8.dp),
-                onProcessingChange = { processing ->
-                    isProcessing = processing
-                    if (processing) isTyping = true
-                },
-                onFocusChange = { focused -> isTyping = focused },
-                onSubmit = {
-                    isTyping = true
-                    scope.launch {
-                        kotlinx.coroutines.delay(2000)
-                        if (input.text.isBlank()) isTyping = false
-                    }
+            },
+            contentWindowInsets = WindowInsets(0)
+        ) { inner ->
+            Column(
+                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                    .padding(top = inner.calculateTopPadding())
+            ) {
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    ChatScrollableContent(
+                        isProcessing = isProcessing,
+                        showWelcome = showHome,
+                        messages = messages,
+                        onCommandClick = { command ->
+                            input = TextFieldValue(command)
+                            isTyping = true
+                            alarmHandled = false
+                        },
+                        forceShowTopOnFocus = isTyping
+                    )
                 }
-            )
+                InputSection(
+                    input = input,
+                    onInputChange = {
+                        input = it
+                        isTyping = it.text.isNotBlank()
+                        if (isTyping) alarmHandled = false
+                    },
+                    scope = scope,
+                    context = context,
+                    messages = messages,
+                    onPersist = { uiMsg ->
+                        scope.launch(Dispatchers.IO) {
+                            chatDao.insert(
+                                ChatMessageEntity(
+                                    text = uiMsg.text,
+                                    sender = uiMsg.sender.name,
+                                    timeMillis = System.currentTimeMillis()
+                                )
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().imePadding()
+                        .navigationBarsPadding().padding(horizontal = 12.dp, vertical = 6.dp),
+                    onProcessingChange = { processing ->
+                        isProcessing = processing
+                        if (processing) { isTyping = true; alarmHandled = false }
+                    },
+                    onFocusChange = { focused -> isTyping = focused; if (focused) alarmHandled = false },
+                    onSubmit = {
+                        isTyping = true; alarmHandled = false
+                        scope.launch {
+                            kotlinx.coroutines.delay(2000)
+                            if (input.text.isBlank()) isTyping = false
+                        }
+                    },
+                    onAttemptFinished = { alarmHandled = true; isTyping = false }
+                )
+            }
         }
     }
 }
-
 @Composable
 private fun ChatScrollableContent(
     isProcessing: Boolean,
     showWelcome: Boolean,
     messages: List<ChatMessage>,
-    onCommandClick: (String) -> Unit
+    onCommandClick: (String) -> Unit,
+    forceShowTopOnFocus: Boolean
 ) {
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(forceShowTopOnFocus) { if (forceShowTopOnFocus) listState.scrollToItem(0) }
+    LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex) }
+
     LazyColumn(
-        modifier = Modifier
-            .fillMaxWidth()
-            .fillMaxHeight(), // replace weight with height/size fill
+        state = listState,
+        modifier = Modifier.fillMaxWidth().fillMaxHeight(),
         contentPadding = PaddingValues(bottom = 8.dp),
         verticalArrangement = Arrangement.Top
     ) {
         stickyHeader {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                WowLogoInline(isProcessing = isProcessing, height = 220.dp)
+            Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)
+                .padding(horizontal = 2.dp), contentAlignment = Alignment.Center) {
+                WowLogoInline(isProcessing = isProcessing, height = 180.dp)
             }
         }
-
         if (showWelcome) {
-            item {
-                WelcomeSection(onCommandClick = onCommandClick)
-            }
+            item { WelcomeSection(onCommandClick = onCommandClick) }
         }
-
-        items(messages.reversed()) { msg ->
+        // Ascending order; user (purple) then app (grey) because we append in this sequence
+        items(messages) { msg ->
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = if (msg.sender == Sender.User) Arrangement.End else Arrangement.Start
             ) {
                 MessageBubble(text = msg.text, isUser = msg.sender == Sender.User)
             }
         }
-
         item { Spacer(Modifier.height(72.dp)) }
     }
 }
-
 @Composable
 fun TopBarWithActions(
     onToggle: () -> Unit,
@@ -336,17 +307,13 @@ fun TopBarWithActions(
         Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .height(48.dp)
-            .padding(horizontal = 10.dp),
+            .height(44.dp)
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = onToggle) {
-            Icon(Icons.Filled.Menu, contentDescription = "Menu")
-        }
+        IconButton(onClick = onToggle) { Icon(Icons.Filled.Menu, contentDescription = "Menu") }
         Spacer(Modifier.weight(1f))
-        IconButton(onClick = onShare) {
-            Icon(Icons.Filled.Share, contentDescription = "Share")
-        }
+        IconButton(onClick = onShare) { Icon(Icons.Filled.Share, contentDescription = "Share") }
     }
 }
 
@@ -368,15 +335,12 @@ private fun WowLogoInline(isProcessing: Boolean, height: Dp) {
         )
         if (isProcessing) {
             val overlaySize = height * 0.28f
-
             Box(
                 modifier = Modifier
                     .height(overlaySize)
                     .width(overlaySize),
                 contentAlignment = Alignment.Center
-            ) {
-                RotatingClockOverlay(isProcessing = true, sizeDp = overlaySize)
-            }
+            ) { RotatingClockOverlay(isProcessing = true, sizeDp = overlaySize) }
         }
     }
 }
@@ -388,14 +352,10 @@ fun WelcomeSection(onCommandClick: (String) -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
     ) {
-        val gradient = Brush.horizontalGradient(
-            listOf(Color(0xFF6A1B9A), Color.Black)
-        )
+        val gradient = Brush.horizontalGradient(listOf(Color(0xFF6A1B9A), Color.Black))
         Text(
             text = buildAnnotatedString {
-                withStyle(style = SpanStyle(brush = gradient)) {
-                    append("Welcome to WOW Assist")
-                }
+                withStyle(style = SpanStyle(brush = gradient)) { append("Welcome to WOW Assist") }
             },
             style = MaterialTheme.typography.headlineSmall,
             textAlign = TextAlign.Center,
@@ -413,11 +373,7 @@ fun WelcomeSection(onCommandClick: (String) -> Unit) {
         )
 
         Spacer(Modifier.height(12.dp))
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
             FilterChip(
                 selected = false,
                 onClick = { onCommandClick("Wake me up at 5 AM daily") },
@@ -435,11 +391,7 @@ fun WelcomeSection(onCommandClick: (String) -> Unit) {
         }
 
         Spacer(Modifier.height(10.dp))
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
             FilterChip(
                 selected = false,
                 onClick = { onCommandClick("Meeting tomorrow 3 PM") },
@@ -464,9 +416,7 @@ private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) {
     val infinite = rememberInfiniteTransition(label = "clock-spin")
     val angle by infinite.animateFloat(
         0f, 360f,
-        animationSpec = infiniteRepeatable(
-            animation = androidx.compose.animation.core.tween(1600, easing = LinearEasing)
-        ),
+        animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing)),
         label = "angle"
     )
     Box(
@@ -478,8 +428,20 @@ private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val c = center
             val r = size.minDimension / 2f
-            drawLine(Color(0xFF6A1B9A), c, c.copy(y = c.y - r * 0.65f), strokeWidth = 6f)
-            drawLine(Color(0xFF424242), c, c.copy(y = c.y - r * 0.45f), strokeWidth = 4f)
+
+            // Correct DrawScope APIs:
+            drawLine(
+                color = Color(0xFF6A1B9A),
+                start = c,
+                end = c.copy(y = c.y - r * 0.65f),
+                strokeWidth = 6f
+            )
+            drawLine(
+                color = Color(0xFF424242),
+                start = c,
+                end = c.copy(y = c.y - r * 0.45f),
+                strokeWidth = 4f
+            )
             drawCircle(Color(0xFF424242), radius = 6f, center = c)
         }
     }
@@ -533,11 +495,15 @@ fun InputSection(
     modifier: Modifier = Modifier,
     onProcessingChange: (Boolean) -> Unit = {},
     onFocusChange: (Boolean) -> Unit,
-    onSubmit: () -> Unit
+    onSubmit: () -> Unit,
+    onAttemptFinished: () -> Unit // NEW
 ) {
     var hasFocus by remember { mutableStateOf(false) }
 
-    Row(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        modifier = modifier, // carries imePadding from caller
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         TextField(
             value = input,
             onValueChange = {
@@ -559,13 +525,20 @@ fun InputSection(
             if (rawText.isEmpty()) return@IconButton
 
             val userMsg = ChatMessage(rawText, Sender.User)
-            messages.add(0, userMsg)
+            messages.add(userMsg)
             onPersist(userMsg)
 
             onInputChange(TextFieldValue(""))
             onSubmit()
 
             scope.launch {
+                var finishedCalled = false
+                fun finishOnce() {
+                    if (!finishedCalled) {
+                        finishedCalled = true
+                        onAttemptFinished()
+                    }
+                }
                 try {
                     onProcessingChange(true)
 
@@ -586,25 +559,28 @@ fun InputSection(
 
                     val http = RetrofitClient.instance.getAlarmDetailsRaw(payload)
                     if (!http.isSuccessful) {
-                        messages.add(0, ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
-                        messages.add(0, ChatMessage("Retry ▶", Sender.App))
+                        messages.add( ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
+                        messages.add( ChatMessage("Retry ▶", Sender.App))
                         onPersist(ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
                         onPersist(ChatMessage("Retry ▶", Sender.App))
+                        finishOnce()
                         return@launch
                     }
                     val bodyStr = http.body()?.string().orEmpty()
                     if (bodyStr.isBlank()) {
-                        messages.add(0, ChatMessage("No response received. Tap to retry.", Sender.App))
-                        messages.add(0, ChatMessage("Retry ▶", Sender.App))
+                        messages.add(ChatMessage("No response received. Tap to retry.", Sender.App))
+                        messages.add( ChatMessage("Retry ▶", Sender.App))
                         onPersist(ChatMessage("No response received. Tap to retry.", Sender.App))
                         onPersist(ChatMessage("Retry ▶", Sender.App))
+                        finishOnce()
                         return@launch
                     }
 
                     val innerJson = extractInnerJsonFromResponse(bodyStr)
                     if (innerJson == null) {
-                        messages.add(0, ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
+                        messages.add( ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
                         onPersist(ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
+                        finishOnce()
                         return@launch
                     }
 
@@ -617,7 +593,13 @@ fun InputSection(
                     val assistantReply = fixed.responseText?.trim().orEmpty()
                     if (assistantReply.isNotEmpty()) {
                         val appMsg = ChatMessage(assistantReply, Sender.App)
-                        messages.add(0, appMsg)
+                        // Insert reply right after the last user message we just added
+                        val lastIndex = messages.lastIndex
+                        if (lastIndex >= 0 && messages[lastIndex].sender == Sender.User) {
+                            messages.add(appMsg)      // appends right after the user message since we just added it
+                        } else {
+                            messages.add(appMsg)
+                        }
                         onPersist(appMsg)
                     }
 
@@ -628,62 +610,8 @@ fun InputSection(
                         isoList = listOf(fixed.datetime!!)
                     }
 
-                    if (isoList.isEmpty() && !fixed.time.isNullOrBlank()) {
-                        val parts = fixed.time.split(":")
-                        val hour = parts.getOrNull(0)?.toIntOrNull()
-                        val minute = parts.getOrNull(1)?.toIntOrNull()
-                        if (hour != null && minute != null) {
-                            val now = Calendar.getInstance()
-                            val cal = Calendar.getInstance().apply {
-                                set(Calendar.SECOND, 0)
-                                set(Calendar.MILLISECOND, 0)
-                                set(Calendar.HOUR_OF_DAY, hour)
-                                set(Calendar.MINUTE, minute)
-                            }
-                            if (cal.before(now)) cal.add(Calendar.DAY_OF_YEAR, 1)
-                            val instant = java.time.Instant.ofEpochMilli(cal.timeInMillis)
-                            val offset = ZoneId.systemDefault().rules.getOffset(instant)
-                            isoList = listOf(java.time.OffsetDateTime.ofInstant(instant, offset).toString())
-                        }
-                    }
-
                     if (isoList.isEmpty()) {
                         val lower = rawText.lowercase(Locale.getDefault()).replace("on", " ")
-                        val dateTimeRegex = Regex(
-                            """\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""",
-                            RegexOption.IGNORE_CASE
-                        )
-                        val m = dateTimeRegex.find(lower)
-                        if (m != null) {
-                            val d = m.groupValues.getOrNull(1)?.toIntOrNull()
-                            val mo = m.groupValues.getOrNull(2)?.toIntOrNull()
-                            val y = m.groupValues.getOrNull(3)?.toIntOrNull()
-                            val hStr = m.groupValues.getOrNull(4).orEmpty()
-                            val minStr = m.groupValues.getOrNull(5).orEmpty().ifBlank { "0" }
-                            val ampm = m.groupValues.getOrNull(6)?.lowercase(Locale.getDefault())
-                            val h = hStr.toIntOrNull()
-                            val min = minStr.toIntOrNull()
-                            if (d != null && mo != null && y != null && h != null && min != null &&
-                                d in 1..31 && mo in 1..12 && h in 0..23 && min in 0..59
-                            ) {
-                                var hour24 = h
-                                if (ampm == "pm" && h in 1..11) hour24 = h + 12
-                                if (ampm == "am" && h == 12) hour24 = 0
-                                val cal = Calendar.getInstance().apply {
-                                    set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-                                    set(Calendar.YEAR, y); set(Calendar.MONTH, mo - 1); set(Calendar.DAY_OF_MONTH, d)
-                                    set(Calendar.HOUR_OF_DAY, hour24); set(Calendar.MINUTE, min)
-                                }
-                                val instant = java.time.Instant.ofEpochMilli(cal.timeInMillis)
-                                val offset = ZoneId.systemDefault().rules.getOffset(instant)
-                                val iso = java.time.OffsetDateTime.ofInstant(instant, offset).toString()
-                                isoList = listOf(iso)
-                            }
-                        }
-                    }
-
-                    if (isoList.isEmpty()) {
-                        val lower = rawText.lowercase(Locale.getDefault())
                         val timeRegex = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE)
                         val mr = timeRegex.find(lower)
                         if (mr != null) {
@@ -709,8 +637,9 @@ fun InputSection(
                     }
 
                     if (isoList.isEmpty()) {
-                        messages.add(0, ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
+                        messages.add( ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
                         onPersist(ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
+                        finishOnce()
                         return@launch
                     }
 
@@ -719,8 +648,9 @@ fun InputSection(
                         runCatching { java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrNull()
                     }.filter { it > nowMs }.distinct().sorted()
                     if (times.isEmpty()) {
-                        messages.add(0, ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
+                        messages.add( ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
                         onPersist(ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
+                        finishOnce()
                         return@launch
                     }
 
@@ -736,22 +666,17 @@ fun InputSection(
                             initialNote = assistantReplyOrNote
                         )
                         val newId = dao.insert(row).toInt()
-                        AlarmHelper.scheduleAlarmClockPublic(
-                            context = context,
-                            label = title,
-                            triggerAt = whenMillis,
-                            alarmId = newId
-                        )
+                        AlarmHelper.scheduleAlarmClockPublic(context, title, whenMillis, newId)
                         scheduled++
                     }
-                    if (scheduled > 0) {
-
-                    }
+                    // Success or not, surface is updated; now mark attempt finished.
+                    finishOnce()
                 } catch (e: Exception) {
                     Log.e("ChatScreen", "Error", e)
                     val err = ChatMessage("Failed: ${e.localizedMessage ?: "Unknown error"}", Sender.App)
-                    messages.add(0, err)
+                    messages.add(err)
                     onPersist(err)
+                    finishOnce()
                 } finally {
                     onProcessingChange(false)
                 }
