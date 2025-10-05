@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
@@ -89,7 +90,6 @@ fun AppContent() {
         composable("alarms") { AlarmListScreen(onBack = { nav.popBackStack() }) }
     }
 }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(onShow: () -> Unit) {
@@ -148,13 +148,21 @@ fun ChatScreen(onShow: () -> Unit) {
 
     val showWelcomeBox by remember { derivedStateOf { !isTyping && !isProcessing } }
 
+    // Drawer width calculation
+    val config = LocalConfiguration.current
+    val screenWidthDp = config.screenWidthDp.dp
+    val drawerTargetWidth: Dp = (screenWidthDp * 0.58f).coerceAtMost(280.dp)
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet {
-                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            ModalDrawerSheet(
+                modifier = Modifier.width(drawerTargetWidth),
+                windowInsets = WindowInsets(0)
+            ) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 32.dp)) {
                     Text("WOW Panel", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
 
                     Text(
                         "Manage Alarms",
@@ -386,7 +394,7 @@ fun WelcomeSection(onCommandClick: (String) -> Unit) {
         Text(
             text = buildAnnotatedString {
                 withStyle(style = SpanStyle(brush = gradient)) {
-                    append("Welcome to WOW Alarm!")
+                    append("Welcome to WOW Assist")
                 }
             },
             style = MaterialTheme.typography.headlineSmall,
