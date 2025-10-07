@@ -11,6 +11,8 @@ import android.widget.Toast
 import com.example.alarmchatapp.AlarmActivity
 import com.example.alarmchatapp.AlarmReceiver
 import java.util.Calendar
+import android.os.Handler
+import android.os.Looper
 import java.util.Date
 
 object AlarmHelper {
@@ -107,6 +109,13 @@ object AlarmHelper {
         Calendar.FRIDAY -> "Friday"
         Calendar.SATURDAY -> "Saturday"
         else -> "Unknown"
+    }
+
+    fun showToastMain(context: Context, message: String) {
+        val appCtx = context.applicationContext
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(appCtx, message, Toast.LENGTH_SHORT).show()
+        }
     }
 
     fun cancelScheduledAlarm(context: Context, alarmId: Int) {

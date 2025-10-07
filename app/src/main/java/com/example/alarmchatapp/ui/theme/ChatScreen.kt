@@ -6,7 +6,6 @@ import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
-import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -49,7 +48,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.core.view.WindowCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -74,6 +72,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.example.alarmchatapp.chatroom.ChatMessageEntity
 import com.example.alarmchatapp.chatroom.ChatDao
+import kotlinx.serialization.json.contentOrNull
 
 enum class Sender { User, App }
 data class ChatMessage(val text: String, val sender: Sender)
@@ -86,6 +85,7 @@ fun AppContent() {
         composable("alarms") { AlarmListScreen(onBack = { nav.popBackStack() }) }
     }
 }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(onShow: () -> Unit) {
@@ -95,6 +95,11 @@ fun ChatScreen(onShow: () -> Unit) {
     var input by remember { mutableStateOf(TextFieldValue()) }
     var isProcessing by remember { mutableStateOf(false) }
     var isTyping by remember { mutableStateOf(false) }
+
+    // NEW: iterative Q&A flow state
+    var accumulator by remember { mutableStateOf<String?>(null) }     // carries all user texts in current flow
+    var pendingQuestion by remember { mutableStateOf<String?>(null) } // last asked question, if any
+    var inFlow by remember { mutableStateOf(false) }                   // whether awaiting follow-up
 
     // Show home again after each attempt finishes
     var alarmHandled by remember { mutableStateOf(false) }
@@ -127,14 +132,12 @@ fun ChatScreen(onShow: () -> Unit) {
         val last24 = withContext(Dispatchers.IO) { chatDao.lastSince(now - 24L * 60L * 60L * 1000L) }
         if (last24.isNotEmpty()) {
             messages.clear()
-            // Ensure ascending order oldest -> newest
             val loaded = last24.map { ChatMessage(it.text, if (it.sender == "User") Sender.User else Sender.App) }
             messages.addAll(loaded.asReversed())
             messages.removeAll { it.text.equals("HELLO THERE", true) && it.sender == Sender.App }
         }
         if (messages.isEmpty()) {
             withContext(Dispatchers.IO) {
-                // prune and purge legacy seed if present
                 chatDao.pruneOlderThan(now - 7L * 24L * 60L * 1000L)
                 runCatching { chatDao.deleteByExactText("HELLO THERE") }
             }
@@ -159,27 +162,42 @@ fun ChatScreen(onShow: () -> Unit) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp)) {
                     Text("WOW Panel", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
-                    Text("Manage Alarms",
-                        modifier = Modifier.fillMaxWidth().clickable { closeDrawer(); onShow() }.padding(vertical = 8.dp))
-                    Text("Choose alarm sound",
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
-                                putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
-                                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select alarm sound")
-                                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
-                                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                    Text(
+                        "Manage Alarms",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { closeDrawer(); onShow() }
+                            .padding(vertical = 8.dp)
+                    )
+                    Text(
+                        "Choose alarm sound",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                                    putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+                                    putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select alarm sound")
+                                    putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                                    putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                                }
+                                pickSound.launch(intent); closeDrawer()
                             }
-                            pickSound.launch(intent); closeDrawer()
-                        }.padding(vertical = 8.dp))
-                    Text("Invite",
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            val invite = Intent(Intent.ACTION_SENDTO).apply {
-                                data = Uri.parse("mailto:")
-                                putExtra(Intent.EXTRA_SUBJECT, "Join me on WOW Assist")
-                                putExtra(Intent.EXTRA_TEXT, "I've been using WOW Assist for smart wake-ups and reminders.\n\nWOW Assist lets conversations in local languages.\n\nhttps://www.workofwisdomai.com/assist")
+                            .padding(vertical = 8.dp)
+                    )
+                    Text(
+                        "Invite",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val invite = Intent(Intent.ACTION_SENDTO).apply {
+                                    data = Uri.parse("mailto:")
+                                    putExtra(Intent.EXTRA_SUBJECT, "Join me on WOW Assist")
+                                    putExtra(Intent.EXTRA_TEXT, "I've been using WOW Assist for smart wake-ups and reminders.\n\nWOW Assist lets conversations in local languages.\n\nhttps://www.workofwisdomai.com/assist")
+                                }
+                                runCatching { context.startActivity(invite) }; closeDrawer()
                             }
-                            runCatching { context.startActivity(invite) }; closeDrawer()
-                        }.padding(vertical = 8.dp))
+                            .padding(vertical = 8.dp)
+                    )
                 }
             }
         }
@@ -191,7 +209,8 @@ fun ChatScreen(onShow: () -> Unit) {
                     onShare = {
                         val share = Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT,
+                            putExtra(
+                                Intent.EXTRA_TEXT,
                                 "I've been using WOW Assist for smart wake-ups and reminders.\n\nWOW Assist supports your language.\n\nhttps://www.workofwisdomai.com/assist")
                         }
                         context.startActivity(Intent.createChooser(share, "Share WOW Assist"))
@@ -252,12 +271,47 @@ fun ChatScreen(onShow: () -> Unit) {
                             if (input.text.isBlank()) isTyping = false
                         }
                     },
-                    onAttemptFinished = { alarmHandled = true; isTyping = false }
+                    // NEW: pass lambdas to handle accumulate/question/complete without changing working methods
+                    buildAccumulatedInput = { rawText ->
+                        val zone = ZoneId.systemDefault()
+                        val ianaId = zone.id
+                        val nowOffset = OffsetDateTime.now(zone).toString()
+                        accumulator = if (!inFlow) {
+                            "Current datetime $nowOffset $ianaId\n\n$rawText"
+                        } else {
+                            (accumulator.orEmpty() + "\n" + rawText)
+                        }
+                        accumulator!!
+                    },
+                    onFlowAwaitQuestion = { q ->
+                        val appMsg = ChatMessage(q, Sender.App)
+                        messages.add(appMsg)
+                        // persist question asynchronously
+                        scope.launch(Dispatchers.IO) {
+                            chatDao.insert(
+                                ChatMessageEntity(
+                                    text = appMsg.text,
+                                    sender = appMsg.sender.name,
+                                    timeMillis = System.currentTimeMillis()
+                                )
+                            )
+                        }
+                        pendingQuestion = q
+                        inFlow = true
+                    },
+                    onFlowComplete = {
+                        pendingQuestion = null
+                        inFlow = false
+                        accumulator = null
+                        alarmHandled = true
+                        isTyping = false
+                    }
                 )
             }
         }
     }
 }
+
 @Composable
 private fun ChatScrollableContent(
     isProcessing: Boolean,
@@ -286,7 +340,7 @@ private fun ChatScrollableContent(
         if (showWelcome) {
             item { WelcomeSection(onCommandClick = onCommandClick) }
         }
-        // Ascending order; user (purple) then app (grey) because we append in this sequence
+        // Ascending order; user (purple) then app (grey)
         items(messages) { msg ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -298,6 +352,7 @@ private fun ChatScrollableContent(
         item { Spacer(Modifier.height(72.dp)) }
     }
 }
+
 @Composable
 fun TopBarWithActions(
     onToggle: () -> Unit,
@@ -429,7 +484,6 @@ private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) {
             val c = center
             val r = size.minDimension / 2f
 
-            // Correct DrawScope APIs:
             drawLine(
                 color = Color(0xFF6A1B9A),
                 start = c,
@@ -496,7 +550,10 @@ fun InputSection(
     onProcessingChange: (Boolean) -> Unit = {},
     onFocusChange: (Boolean) -> Unit,
     onSubmit: () -> Unit,
-    onAttemptFinished: () -> Unit // NEW
+    // NEW: lightweight hooks to support Q&A without modifying working internals
+    buildAccumulatedInput: (String) -> String,
+    onFlowAwaitQuestion: (String) -> Unit,
+    onFlowComplete: () -> Unit
 ) {
     var hasFocus by remember { mutableStateOf(false) }
 
@@ -536,31 +593,26 @@ fun InputSection(
                 fun finishOnce() {
                     if (!finishedCalled) {
                         finishedCalled = true
-                        onAttemptFinished()
+                        onFlowComplete()
                     }
                 }
                 try {
                     onProcessingChange(true)
 
-                    val zone = ZoneId.systemDefault()
-                    val ianaId = zone.id
-                    val nowOffset = OffsetDateTime.now(zone).toString()
-                    val augmentedUserInput = buildString {
-                        append("Current datetime ").append(nowOffset).append(' ').append(ianaId).append("\n\n")
-                        append(rawText)
-                    }
+                    // NEW: build accumulated prompt for the platform
+                    val accumulated = buildAccumulatedInput(rawText)
 
                     val payload: Map<String, Any> = mapOf(
                         "objective" to "Alarm Generator",
                         "objective_key" to "alarm_generator",
                         "model" to "openai",
-                        "inputs" to mapOf("user_input" to augmentedUserInput, "ctype" to "text")
+                        "inputs" to mapOf("user_input" to accumulated, "ctype" to "text")
                     )
 
                     val http = RetrofitClient.instance.getAlarmDetailsRaw(payload)
                     if (!http.isSuccessful) {
-                        messages.add( ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
-                        messages.add( ChatMessage("Retry ▶", Sender.App))
+                        messages.add(ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
+                        messages.add(ChatMessage("Retry ▶", Sender.App))
                         onPersist(ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
                         onPersist(ChatMessage("Retry ▶", Sender.App))
                         finishOnce()
@@ -569,7 +621,7 @@ fun InputSection(
                     val bodyStr = http.body()?.string().orEmpty()
                     if (bodyStr.isBlank()) {
                         messages.add(ChatMessage("No response received. Tap to retry.", Sender.App))
-                        messages.add( ChatMessage("Retry ▶", Sender.App))
+                        messages.add(ChatMessage("Retry ▶", Sender.App))
                         onPersist(ChatMessage("No response received. Tap to retry.", Sender.App))
                         onPersist(ChatMessage("Retry ▶", Sender.App))
                         finishOnce()
@@ -578,12 +630,21 @@ fun InputSection(
 
                     val innerJson = extractInnerJsonFromResponse(bodyStr)
                     if (innerJson == null) {
-                        messages.add( ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
+                        messages.add(ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
                         onPersist(ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
                         finishOnce()
                         return@launch
                     }
 
+                    // NEW: detect question; if present, ask and stop (do not schedule yet)
+                    val rootEl = Json.parseToJsonElement(innerJson).jsonObject
+                    val maybeQuestion = rootEl["question"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    if (maybeQuestion != null) {
+                        onFlowAwaitQuestion(maybeQuestion)
+                        return@launch
+                    }
+
+                    // Existing parsing/scheduling flow remains unchanged
                     val parsed: AlarmContract = AlarmParser.parseAlarmJson(innerJson)
                     val (fixed, issues) = AlarmParser.validateAndFixAlarm(parsed)
                     Log.d("AlarmParser", "innerJson=$innerJson")
@@ -593,13 +654,7 @@ fun InputSection(
                     val assistantReply = fixed.responseText?.trim().orEmpty()
                     if (assistantReply.isNotEmpty()) {
                         val appMsg = ChatMessage(assistantReply, Sender.App)
-                        // Insert reply right after the last user message we just added
-                        val lastIndex = messages.lastIndex
-                        if (lastIndex >= 0 && messages[lastIndex].sender == Sender.User) {
-                            messages.add(appMsg)      // appends right after the user message since we just added it
-                        } else {
-                            messages.add(appMsg)
-                        }
+                        messages.add(appMsg)
                         onPersist(appMsg)
                     }
 
@@ -637,7 +692,7 @@ fun InputSection(
                     }
 
                     if (isoList.isEmpty()) {
-                        messages.add( ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
+                        messages.add(ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
                         onPersist(ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
                         finishOnce()
                         return@launch
@@ -648,7 +703,7 @@ fun InputSection(
                         runCatching { java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrNull()
                     }.filter { it > nowMs }.distinct().sorted()
                     if (times.isEmpty()) {
-                        messages.add( ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
+                        messages.add(ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
                         onPersist(ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
                         finishOnce()
                         return@launch
@@ -669,7 +724,7 @@ fun InputSection(
                         AlarmHelper.scheduleAlarmClockPublic(context, title, whenMillis, newId)
                         scheduled++
                     }
-                    // Success or not, surface is updated; now mark attempt finished.
+                    // Success or not, flow complete
                     finishOnce()
                 } catch (e: Exception) {
                     Log.e("ChatScreen", "Error", e)
