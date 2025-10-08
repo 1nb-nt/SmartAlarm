@@ -1,13 +1,28 @@
 package com.example.alarmchatapp.ui.theme
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -16,8 +31,8 @@ import com.example.alarmchatapp.Alarm
 import com.example.alarmchatapp.AppDatabase
 import com.example.alarmchatapp.utils.AlarmHelper
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runBlocking
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -26,128 +41,75 @@ import java.util.Locale
 @Composable
 fun AlarmListScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val dao = remember { AppDatabase.getDatabase(context).alarmDao() }
-    var alarms by remember { mutableStateOf<List<Alarm>>(emptyList()) }
-    val scope = rememberCoroutineScope()
+    val items = remember { mutableStateListOf<Alarm>() }
 
-    fun refresh() = scope.launch(Dispatchers.IO) {
-        val list = runCatching { dao.getAll() }.getOrElse { emptyList() }
-        withContext(Dispatchers.Main) { alarms = list }
+    LaunchedEffect(Unit) {
+        val dao = AppDatabase.getDatabase(context).alarmDao()
+        val data = withContext(Dispatchers.IO) { dao.getAll() }
+        items.clear()
+        items.addAll(data)
     }
 
-    LaunchedEffect(Unit) { refresh() }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
+    Column(modifier = Modifier.padding(16.dp)) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(8.dp),
-            horizontalArrangement = Arrangement.Start,
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Button(onClick = onBack) { Text("Back to Chat") }
-            Spacer(Modifier.width(12.dp))
-            Text("Manage Alarms", style = MaterialTheme.typography.titleMedium)
+            Text(text = "Alarms", style = MaterialTheme.typography.titleLarge)
+            Button(onClick = onBack) { Text("Back") }
         }
-
-        if (alarms.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No alarms scheduled")
-            }
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(items = alarms, key = { it.id }) { alarm ->
-                    AlarmItem(
-                        alarm = alarm,
-                        onDelete = {
-                            scope.launch(Dispatchers.IO) {
-                                runCatching {
-                                    // Cancel the AlarmClock/Exact PI using helper
-                                    AlarmHelper.cancelScheduledAlarm(context, alarm.id)
-                                    dao.delete(alarm)
-                                }
-                                refresh()
-                            }
-                        },
-                        onRescheduleNow = {
-                            scope.launch(Dispatchers.IO) {
-                                runCatching {
-                                    // Re-arm this alarm using the new helper
-                                    AlarmHelper.scheduleAlarmClockPublic(
-                                        context = context,
-                                        label = alarm.message.ifBlank { "Alarm" },
-                                        triggerAt = alarm.triggerTimeMillis,
-                                        alarmId = alarm.id
-                                    )
-                                }
-                                refresh()
-                            }
+        Spacer(Modifier.height(8.dp))
+        LazyColumn {
+            items(items) { alarm ->
+                AlarmRow(
+                    alarm = alarm,
+                    onDelete = {
+                        runBlocking {
+                            val dao = AppDatabase.getDatabase(context).alarmDao()
+                            withContext(Dispatchers.IO) { dao.delete(alarm) }
                         }
-                    )
-                }
+                        items.remove(alarm)
+                    },
+                    onReschedule = {
+                        AlarmHelper.scheduleAlarmClockPublic(
+                            context,
+                            alarm.message,
+                            alarm.triggerTimeMillis,
+                            alarm.id
+                        )
+                    }
+                )
             }
         }
     }
 }
 
 @Composable
-private fun AlarmItem(
+private fun AlarmRow(
     alarm: Alarm,
     onDelete: () -> Unit,
-    onRescheduleNow: () -> Unit
+    onReschedule: () -> Unit
 ) {
-    val timeStr = remember(alarm.triggerTimeMillis) {
-        SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(alarm.triggerTimeMillis))
-    }
-    val dateStr = remember(alarm.triggerTimeMillis) {
-        SimpleDateFormat("EEE, dd MMM yyyy", Locale.getDefault()).format(Date(alarm.triggerTimeMillis))
-    }
-    val dayStr = remember(alarm.triggerTimeMillis, alarm.recurringDays, alarm.isRecurring) {
-        if (alarm.isRecurring && !alarm.recurringDays.isNullOrEmpty()) {
-            alarm.recurringDays.joinToString(", ") { d ->
-                when (d) {
-                    Calendar.SUNDAY -> "Sun"
-                    Calendar.MONDAY -> "Mon"
-                    Calendar.TUESDAY -> "Tue"
-                    Calendar.WEDNESDAY -> "Wed"
-                    Calendar.THURSDAY -> "Thu"
-                    Calendar.FRIDAY -> "Fri"
-                    Calendar.SATURDAY -> "Sat"
-                    else -> "Day"
-                }
-            }
-        } else {
-            Calendar.getInstance().apply { timeInMillis = alarm.triggerTimeMillis }
-                .getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, Locale.getDefault()) ?: "Day"
-        }
-    }
-
-    Row(
+    val sdf = remember { SimpleDateFormat("EEE, dd MMM yyyy HH:mm", Locale.getDefault()) }
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 10.dp, horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 6.dp),
+        colors = CardDefaults.cardColors()
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = alarm.message.ifBlank { "Alarm" },
-                style = MaterialTheme.typography.titleMedium
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = "$timeStr • $dayStr • $dateStr",
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onRescheduleNow) { Text("Re-arm") }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Delete, contentDescription = "Delete Alarm")
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(text = alarm.message, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(text = sdf.format(Date(alarm.triggerTimeMillis)), style = MaterialTheme.typography.bodyMedium)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Button(onClick = onReschedule) { Text("Reschedule") }
+                IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, contentDescription = "Delete") }
             }
         }
     }

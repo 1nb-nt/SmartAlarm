@@ -96,7 +96,7 @@ fun ChatScreen(onShow: () -> Unit) {
     var isProcessing by remember { mutableStateOf(false) }
     var isTyping by remember { mutableStateOf(false) }
 
-    // NEW: iterative Q&A flow state
+    // iterative Q&A flow state
     var accumulator by remember { mutableStateOf<String?>(null) }     // carries all user texts in current flow
     var pendingQuestion by remember { mutableStateOf<String?>(null) } // last asked question, if any
     var inFlow by remember { mutableStateOf(false) }                   // whether awaiting follow-up
@@ -110,8 +110,9 @@ fun ChatScreen(onShow: () -> Unit) {
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) {}
+    ) { /* no-op */ }
 
+    // Ringtone picker launcher
     val pickSound = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { res ->
@@ -120,13 +121,20 @@ fun ChatScreen(onShow: () -> Unit) {
             context.getSharedPreferences("wow_prefs", Context.MODE_PRIVATE)
                 .edit().putString("ringtone_uri", uri.toString()).apply()
             Toast.makeText(context, "Alarm sound set", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "No sound selected", Toast.LENGTH_SHORT).show()
         }
     }
 
     LaunchedEffect(Unit) {
         val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { /* optionally POST_NOTIFICATIONS */ }
-        permissionLauncher.launch(perms.toTypedArray())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Optionally request POST_NOTIFICATIONS if desired
+            // perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (perms.isNotEmpty()) {
+            permissionLauncher.launch(perms.toTypedArray())
+        }
 
         val now = System.currentTimeMillis()
         val last24 = withContext(Dispatchers.IO) { chatDao.lastSince(now - 24L * 60L * 60L * 1000L) }
@@ -159,7 +167,11 @@ fun ChatScreen(onShow: () -> Unit) {
                 modifier = Modifier.width(drawerTargetWidth),
                 windowInsets = WindowInsets.statusBars
             ) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp)) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 12.dp)
+                ) {
                     Text("WOW Panel", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
                     Text(
@@ -179,8 +191,14 @@ fun ChatScreen(onShow: () -> Unit) {
                                     putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select alarm sound")
                                     putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
                                     putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                                    // Pre-select existing if saved
+                                    val saved = context.getSharedPreferences("wow_prefs", Context.MODE_PRIVATE)
+                                        .getString("ringtone_uri", null)
+                                    val existing = saved?.let { Uri.parse(it) }
+                                    putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, existing)
                                 }
-                                pickSound.launch(intent); closeDrawer()
+                                pickSound.launch(intent)
+                                closeDrawer()
                             }
                             .padding(vertical = 8.dp)
                     )
@@ -192,9 +210,13 @@ fun ChatScreen(onShow: () -> Unit) {
                                 val invite = Intent(Intent.ACTION_SENDTO).apply {
                                     data = Uri.parse("mailto:")
                                     putExtra(Intent.EXTRA_SUBJECT, "Join me on WOW Assist")
-                                    putExtra(Intent.EXTRA_TEXT, "I've been using WOW Assist for smart wake-ups and reminders.\n\nWOW Assist lets conversations in local languages.\n\nhttps://www.workofwisdomai.com/assist")
+                                    putExtra(
+                                        Intent.EXTRA_TEXT,
+                                        "I've been using WOW Assist for smart wake-ups and reminders.\n\nWOW Assist lets conversations in local languages.\n\nhttps://www.workofwisdomai.com/assist"
+                                    )
                                 }
-                                runCatching { context.startActivity(invite) }; closeDrawer()
+                                runCatching { context.startActivity(invite) }
+                                closeDrawer()
                             }
                             .padding(vertical = 8.dp)
                     )
@@ -211,7 +233,8 @@ fun ChatScreen(onShow: () -> Unit) {
                             type = "text/plain"
                             putExtra(
                                 Intent.EXTRA_TEXT,
-                                "I've been using WOW Assist for smart wake-ups and reminders.\n\nWOW Assist supports your language.\n\nhttps://www.workofwisdomai.com/assist")
+                                "I've been using WOW Assist for smart wake-ups and reminders.\n\nWOW Assist supports your language.\n\nhttps://www.workofwisdomai.com/assist"
+                            )
                         }
                         context.startActivity(Intent.createChooser(share, "Share WOW Assist"))
                     }
@@ -220,7 +243,9 @@ fun ChatScreen(onShow: () -> Unit) {
             contentWindowInsets = WindowInsets(0)
         ) { inner ->
             Column(
-                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
                     .padding(top = inner.calculateTopPadding())
             ) {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -257,21 +282,31 @@ fun ChatScreen(onShow: () -> Unit) {
                             )
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().imePadding()
-                        .navigationBarsPadding().padding(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .imePadding()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
                     onProcessingChange = { processing ->
                         isProcessing = processing
-                        if (processing) { isTyping = true; alarmHandled = false }
+                        if (processing) {
+                            isTyping = true
+                            alarmHandled = false
+                        }
                     },
-                    onFocusChange = { focused -> isTyping = focused; if (focused) alarmHandled = false },
+                    onFocusChange = { focused ->
+                        isTyping = focused
+                        if (focused) alarmHandled = false
+                    },
                     onSubmit = {
-                        isTyping = true; alarmHandled = false
+                        isTyping = true
+                        alarmHandled = false
                         scope.launch {
                             kotlinx.coroutines.delay(2000)
                             if (input.text.isBlank()) isTyping = false
                         }
                     },
-                    // NEW: pass lambdas to handle accumulate/question/complete without changing working methods
+                    // iterative flow lambdas
                     buildAccumulatedInput = { rawText ->
                         val zone = ZoneId.systemDefault()
                         val ianaId = zone.id
@@ -311,7 +346,6 @@ fun ChatScreen(onShow: () -> Unit) {
         }
     }
 }
-
 @Composable
 private fun ChatScrollableContent(
     isProcessing: Boolean,

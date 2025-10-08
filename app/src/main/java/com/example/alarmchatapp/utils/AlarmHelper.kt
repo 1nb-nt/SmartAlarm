@@ -11,9 +11,6 @@ import android.widget.Toast
 import com.example.alarmchatapp.AlarmActivity
 import com.example.alarmchatapp.AlarmReceiver
 import java.util.Calendar
-import android.os.Handler
-import android.os.Looper
-import java.util.Date
 
 object AlarmHelper {
 
@@ -26,107 +23,84 @@ object AlarmHelper {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
             Toast.makeText(context, "Allow exact alarms in settings to schedule.", Toast.LENGTH_LONG).show()
-            try {
+            runCatching {
                 context.startActivity(
                     Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
                         data = Uri.parse("package:${context.packageName}")
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                 )
-            } catch (_: Exception) { }
-            // Do NOT return; proceed to schedule with setAlarmClock so it still fires
+            }
         }
 
-        val fire = Intent(context, AlarmReceiver::class.java).apply {
-            putExtra(AlarmReceiver.EXTRA_LABEL, label)
-            putExtra(AlarmReceiver.EXTRA_ID, alarmId)
-        }
-        val op = PendingIntent.getBroadcast(
-            context,
-            alarmId,
-            fire,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val show = Intent(context, AlarmActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        // Full-screen UI intent (for the status bar affordance shown by setAlarmClock)
+        val showIntent = Intent(context, AlarmActivity::class.java).apply {
+            action = "SHOW_ALARM_UI_$alarmId"
             putExtra(AlarmReceiver.EXTRA_LABEL, label)
             putExtra(AlarmReceiver.EXTRA_ID, alarmId)
         }
         val showPi = PendingIntent.getActivity(
             context,
             alarmId,
-            show,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            showIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or pendingFlagImmutable()
+        )
+
+        // Actual fire broadcast delivered at trigger time
+// Actual fire broadcast delivered at trigger time
+        val fireIntent = Intent(context, AlarmReceiver::class.java).apply {
+            action = "FIRE_ALARM_$alarmId"
+            putExtra(AlarmReceiver.EXTRA_LABEL, label)
+            putExtra(AlarmReceiver.EXTRA_ID, alarmId)
+        }
+        val firePi = PendingIntent.getBroadcast(
+            context,
+            alarmId,
+            fireIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or pendingFlagMutableIfNeeded()
         )
 
         val info = AlarmManager.AlarmClockInfo(triggerAt, showPi)
-        am.setAlarmClock(info, op)
-
-        Toast.makeText(
-            context,
-            "Alarm scheduled: $label at ${Date(triggerAt)}",
-            Toast.LENGTH_SHORT
-        ).show()
+        am.setAlarmClock(info, firePi)
     }
-
-    fun scheduleSingleAlarm(
-        context: Context,
-        label: String,
-        triggerAtMillis: Long,
-        requestCode: Int
-    ) = scheduleAlarmClockPublic(context, label, triggerAtMillis, requestCode)
 
     fun computeNextAmongDays(hour: Int, minute: Int, days: List<Int>): Long {
-        var best: Long? = null
-        for (dow in days) {
-            val candidate = getNextAlarmTimeForDay(hour, minute, dow)
-            best = if (best == null) candidate else minOf(best!!, candidate)
-        }
-        return best!!
-    }
-
-    fun getNextAlarmTimeForDay(hour: Int, minute: Int, dayOfWeek: Int): Long {
-        val cal = Calendar.getInstance().apply {
+        // days must be Calendar.DAY_OF_WEEK values (1..7)
+        val now = Calendar.getInstance()
+        val base = Calendar.getInstance().apply {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
             set(Calendar.HOUR_OF_DAY, hour)
             set(Calendar.MINUTE, minute)
-            set(Calendar.DAY_OF_WEEK, dayOfWeek)
         }
-        if (cal.before(Calendar.getInstance())) {
-            cal.add(Calendar.WEEK_OF_YEAR, 1)
+
+        val todayDow = now.get(Calendar.DAY_OF_WEEK) // 1..7
+        var bestDiff = Int.MAX_VALUE
+
+        for (dow in days) {
+            var diff = dow - todayDow
+            // If today but the time already passed, roll 1 week
+            if (diff < 0 || (diff == 0 && base.timeInMillis <= now.timeInMillis)) {
+                diff += 7
+            }
+            if (diff < bestDiff) bestDiff = diff
         }
-        return cal.timeInMillis
+
+        if (bestDiff == Int.MAX_VALUE) {
+            // fallback: next day
+            base.add(Calendar.DAY_OF_YEAR, 1)
+            return base.timeInMillis
+        }
+
+        base.add(Calendar.DAY_OF_YEAR, bestDiff)
+        return base.timeInMillis
     }
 
-    fun getDayNameByCalendar(day: Int) = when (day) {
-        Calendar.SUNDAY -> "Sunday"
-        Calendar.MONDAY -> "Monday"
-        Calendar.TUESDAY -> "Tuesday"
-        Calendar.WEDNESDAY -> "Wednesday"
-        Calendar.THURSDAY -> "Thursday"
-        Calendar.FRIDAY -> "Friday"
-        Calendar.SATURDAY -> "Saturday"
-        else -> "Unknown"
+    private fun pendingFlagImmutable(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
     }
 
-    fun showToastMain(context: Context, message: String) {
-        val appCtx = context.applicationContext
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(appCtx, message, Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    fun cancelScheduledAlarm(context: Context, alarmId: Int) {
-        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val i = Intent(context, AlarmReceiver::class.java)
-        val pi = PendingIntent.getBroadcast(
-            context,
-            alarmId,
-            i,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        am.cancel(pi)
+    private fun pendingFlagMutableIfNeeded(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
     }
 }
