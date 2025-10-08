@@ -28,16 +28,29 @@ class AlarmReceiver : BroadcastReceiver() {
 
     companion object {
         private val firedIds = Collections.synchronizedSet(mutableSetOf<Int>())
+
         const val ACTION_DISMISS = "com.example.alarmchatapp.ACTION_DISMISS"
+
         private const val CHANNEL_ID = "alarm_clock_fsi_v2"
         private const val CHANNEL_NAME = "Alarm Full Screen"
+        private const val NOTIF_ID_BASE = 52001
+
         const val EXTRA_LABEL = "alarm_message"
         const val EXTRA_ID = "alarm_id"
         const val EXTRA_NOTE = "initial_note"
-        private const val NOTIF_ID_BASE = 52001
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        // Handle dismiss first so it always clears
+        if (intent.action == ACTION_DISMISS) {
+            val id = intent.getIntExtra(EXTRA_ID, 0)
+            stopAudio()
+            (context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+                ?.cancel(NOTIF_ID_BASE + id)
+            firedIds.remove(id)
+            return
+        }
+
         val message = intent.getStringExtra(EXTRA_LABEL) ?: "Alarm"
         val initialNote = intent.getStringExtra(EXTRA_NOTE) ?: ""
         val id = intent.getIntExtra(EXTRA_ID, 0)
@@ -52,56 +65,49 @@ class AlarmReceiver : BroadcastReceiver() {
 
         val nm = context.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val existing = nm.getNotificationChannel(CHANNEL_ID)
-            if (existing == null) {
-                val ch = NotificationChannel(
-                    CHANNEL_ID,
-                    CHANNEL_NAME,
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply {
-                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                    description = "Ringing alarms"
-                    enableVibration(true)
-                    setSound(null, null) // manage sound via Ringtone, not channel
-                }
-                nm.createNotificationChannel(ch)
+            if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                        enableVibration(true)
+                        setSound(null, null) // sound via Ringtone
+                    }
+                )
             }
         }
 
-        // Ensure any previous tone is stopped to avoid overlaps
-        runCatching { AlarmAudio.ringtone?.let { if (it.isPlaying) it.stop() } }.onFailure {
-            Log.w("AlarmReceiver", "Failed stopping previous tone: ${it.message}")
-        }
+        // Stop old audio if any
+        runCatching { AlarmAudio.ringtone?.let { if (it.isPlaying) it.stop() } }
 
-        // Resolve saved ringtone URI from SharedPreferences
+        // Choose ringtone: saved URI or system default
         val prefs = context.getSharedPreferences("wow_prefs", Context.MODE_PRIVATE)
         val saved = prefs.getString("ringtone_uri", null)
         val chosen: Uri? = saved?.let { runCatching { Uri.parse(it) }.getOrNull() }
 
-        fun isPlayable(uri: Uri?, ctx: Context): Boolean {
-            if (uri == null) return false
+        fun isPlayable(u: Uri?, ctx: Context): Boolean {
+            if (u == null) return false
             return try {
-                ctx.contentResolver.openAssetFileDescriptor(uri, "r")?.close()
+                ctx.contentResolver.openAssetFileDescriptor(u, "r")?.close()
                 true
             } catch (_: Exception) {
                 false
             }
         }
 
+
         val fallback: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
-        val playUri: Uri = if (isPlayable(chosen, context)) chosen!! else fallback
+        val playUri = if (isPlayable(chosen, context)) chosen!! else fallback
 
-        // Start audio immediately in the receiver (looping)
-        val tone: Ringtone? = try {
-            RingtoneManager.getRingtone(context, playUri)
-        } catch (se: SecurityException) {
-            Log.w("AlarmReceiver", "No read permission for chosen URI, fallback. ${se.message}")
-            runCatching { RingtoneManager.getRingtone(context, fallback) }.getOrNull()
-        }
+        val tone: Ringtone? = runCatching { RingtoneManager.getRingtone(context, playUri) }
+            .getOrElse {
+                runCatching { RingtoneManager.getRingtone(context, fallback) }.getOrNull()
+            }
 
         tone?.let { rt ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -114,13 +120,10 @@ class AlarmReceiver : BroadcastReceiver() {
                 @Suppress("DEPRECATION")
                 rt.streamType = AudioManager.STREAM_ALARM
             }
-            runCatching { rt.play() }.onFailure {
-                Log.e("AlarmReceiver", "Ringtone play failed: ${it.message}")
-            }
+            runCatching { rt.play() }
             AlarmAudio.ringtone = rt
         }
 
-        // Vibrate pattern
         val vibrator = context.getSystemService(Vibrator::class.java)
         val pattern = longArrayOf(0, 800, 400)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -131,7 +134,6 @@ class AlarmReceiver : BroadcastReceiver() {
         }
         AlarmAudio.vibrator = vibrator
 
-        // Full-screen activity intent
         val fullIntent = Intent(context, AlarmActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP or
@@ -141,20 +143,16 @@ class AlarmReceiver : BroadcastReceiver() {
             putExtra(EXTRA_NOTE, initialNote)
         }
         val fullPi = PendingIntent.getActivity(
-            context,
-            id,
-            fullIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            context, id, fullIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or immutable()
         )
 
-        // Dismiss action
         val dismissPi = PendingIntent.getBroadcast(
-            context,
-            id + 1000,
-            Intent(context, DismissReceiver::class.java)
+            context, id + 1000,
+            Intent(context, AlarmReceiver::class.java)
                 .setAction(ACTION_DISMISS)
                 .putExtra(EXTRA_ID, id),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or immutable()
         )
 
         val notif = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -164,7 +162,6 @@ class AlarmReceiver : BroadcastReceiver() {
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setDefaults(0) // no channel sound; we handle sound ourselves
             .setOnlyAlertOnce(true)
             .setAutoCancel(false)
             .setOngoing(true)
@@ -174,7 +171,7 @@ class AlarmReceiver : BroadcastReceiver() {
 
         nm.notify(NOTIF_ID_BASE + id, notif)
 
-        // Handle DB updates/rescheduling off the main thread
+        // DB reschedule logic (placeholder)
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -188,7 +185,7 @@ class AlarmReceiver : BroadcastReceiver() {
                     val hour = firedCal.get(Calendar.HOUR_OF_DAY)
                     val minute = firedCal.get(Calendar.MINUTE)
 
-                    val nextTrigger: Long? = when {
+                    val nextTrigger = when {
                         alarm.recurringDays?.size == 7 -> {
                             Calendar.getInstance().apply {
                                 set(Calendar.SECOND, 0)
@@ -208,7 +205,13 @@ class AlarmReceiver : BroadcastReceiver() {
                     if (nextTrigger != null) {
                         dao.update(alarm.copy(triggerTimeMillis = nextTrigger))
                         com.example.alarmchatapp.utils.AlarmHelper
-                            .scheduleAlarmClockPublic(context, alarm.message, nextTrigger, alarm.id)
+                            .scheduleAlarmClockPublic(
+                                context,
+                                alarm.message,
+                                nextTrigger,
+                                alarm.id,
+                                alarm.initialNote ?: ""
+                            )
                     } else {
                         dao.delete(alarm)
                     }
@@ -216,10 +219,8 @@ class AlarmReceiver : BroadcastReceiver() {
                     dao.delete(alarm)
                     val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
                     val cancelPi = PendingIntent.getBroadcast(
-                        context,
-                        id,
-                        Intent(context, AlarmReceiver::class.java),
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                        context, id, Intent(context, AlarmReceiver::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or immutable()
                     )
                     am.cancel(cancelPi)
                 }
@@ -229,5 +230,15 @@ class AlarmReceiver : BroadcastReceiver() {
                 pending.finish()
             }
         }
+    }
+
+    private fun immutable(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+
+    private fun stopAudio() {
+        runCatching { AlarmAudio.ringtone?.let { if (it.isPlaying) it.stop() } }
+        AlarmAudio.ringtone = null
+        runCatching { AlarmAudio.vibrator?.cancel() }
+        AlarmAudio.vibrator = null
     }
 }

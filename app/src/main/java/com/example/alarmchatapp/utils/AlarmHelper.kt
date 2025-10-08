@@ -18,7 +18,8 @@ object AlarmHelper {
         context: Context,
         label: String,
         triggerAt: Long,
-        alarmId: Int
+        alarmId: Int,
+        initialNote: String = ""
     ) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
@@ -33,31 +34,28 @@ object AlarmHelper {
             }
         }
 
-        // Full-screen UI intent (for the status bar affordance shown by setAlarmClock)
+        // Show intent (affordance)
         val showIntent = Intent(context, AlarmActivity::class.java).apply {
             action = "SHOW_ALARM_UI_$alarmId"
             putExtra(AlarmReceiver.EXTRA_LABEL, label)
             putExtra(AlarmReceiver.EXTRA_ID, alarmId)
+            putExtra(AlarmReceiver.EXTRA_NOTE, initialNote)
         }
         val showPi = PendingIntent.getActivity(
-            context,
-            alarmId,
-            showIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or pendingFlagImmutable()
+            context, alarmId, showIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or immutable()
         )
 
-        // Actual fire broadcast delivered at trigger time
-// Actual fire broadcast delivered at trigger time
+        // Fire broadcast
         val fireIntent = Intent(context, AlarmReceiver::class.java).apply {
             action = "FIRE_ALARM_$alarmId"
             putExtra(AlarmReceiver.EXTRA_LABEL, label)
             putExtra(AlarmReceiver.EXTRA_ID, alarmId)
+            putExtra(AlarmReceiver.EXTRA_NOTE, initialNote)
         }
         val firePi = PendingIntent.getBroadcast(
-            context,
-            alarmId,
-            fireIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or pendingFlagMutableIfNeeded()
+            context, alarmId, fireIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or mutableIfS()
         )
 
         val info = AlarmManager.AlarmClockInfo(triggerAt, showPi)
@@ -65,7 +63,6 @@ object AlarmHelper {
     }
 
     fun computeNextAmongDays(hour: Int, minute: Int, days: List<Int>): Long {
-        // days must be Calendar.DAY_OF_WEEK values (1..7)
         val now = Calendar.getInstance()
         val base = Calendar.getInstance().apply {
             set(Calendar.SECOND, 0)
@@ -74,12 +71,11 @@ object AlarmHelper {
             set(Calendar.MINUTE, minute)
         }
 
-        val todayDow = now.get(Calendar.DAY_OF_WEEK) // 1..7
+        val todayDow = now.get(Calendar.DAY_OF_WEEK)
         var bestDiff = Int.MAX_VALUE
 
         for (dow in days) {
             var diff = dow - todayDow
-            // If today but the time already passed, roll 1 week
             if (diff < 0 || (diff == 0 && base.timeInMillis <= now.timeInMillis)) {
                 diff += 7
             }
@@ -87,7 +83,6 @@ object AlarmHelper {
         }
 
         if (bestDiff == Int.MAX_VALUE) {
-            // fallback: next day
             base.add(Calendar.DAY_OF_YEAR, 1)
             return base.timeInMillis
         }
@@ -96,11 +91,9 @@ object AlarmHelper {
         return base.timeInMillis
     }
 
-    private fun pendingFlagImmutable(): Int {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
-    }
+    private fun immutable(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
 
-    private fun pendingFlagMutableIfNeeded(): Int {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
-    }
+    private fun mutableIfS(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
 }

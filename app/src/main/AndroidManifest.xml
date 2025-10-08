@@ -56,7 +56,7 @@
         <!-- Full-screen ringing UI -->
         <activity
             android:name=".AlarmActivity"
-            android:exported="false"
+            android:exported="true"
             android:excludeFromRecents="true"
             android:launchMode="singleTop"
             android:showWhenLocked="true"
