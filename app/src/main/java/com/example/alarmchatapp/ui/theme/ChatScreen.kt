@@ -584,7 +584,6 @@ fun InputSection(
     onProcessingChange: (Boolean) -> Unit = {},
     onFocusChange: (Boolean) -> Unit,
     onSubmit: () -> Unit,
-    // NEW: lightweight hooks to support Q&A without modifying working internals
     buildAccumulatedInput: (String) -> String,
     onFlowAwaitQuestion: (String) -> Unit,
     onFlowComplete: () -> Unit
@@ -592,7 +591,7 @@ fun InputSection(
     var hasFocus by remember { mutableStateOf(false) }
 
     Row(
-        modifier = modifier, // carries imePadding from caller
+        modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
     ) {
         TextField(
@@ -633,9 +632,116 @@ fun InputSection(
                 try {
                     onProcessingChange(true)
 
-                    // NEW: build accumulated prompt for the platform
-                    val accumulated = buildAccumulatedInput(rawText)
+                    // Local recurring detection (bypass API if matched)
+                    val lower = rawText.lowercase(Locale.getDefault())
 
+                    val dayMap = mapOf(
+                        "monday" to Calendar.MONDAY,
+                        "tuesday" to Calendar.TUESDAY,
+                        "wednesday" to Calendar.WEDNESDAY,
+                        "thursday" to Calendar.THURSDAY,
+                        "friday" to Calendar.FRIDAY,
+                        "saturday" to Calendar.SATURDAY,
+                        "sunday" to Calendar.SUNDAY
+                    )
+
+                    fun parseEveryParentheses(text: String): List<Int>? {
+                        val m = Regex("""every\s*\(([^)]+)\)""").find(text) ?: return null
+                        val inside = m.groupValues[1]
+                        val tokens = inside.split(',', ';').flatMap { it.split(' ') }
+                            .map { it.trim().lowercase(Locale.getDefault()) }
+                            .filter { it.isNotBlank() }
+                        val resolved = tokens.mapNotNull { token ->
+                            when (token.take(3)) {
+                                "mon" -> Calendar.MONDAY
+                                "tue" -> Calendar.TUESDAY
+                                "wed" -> Calendar.WEDNESDAY
+                                "thu" -> Calendar.THURSDAY
+                                "fri" -> Calendar.FRIDAY
+                                "sat" -> Calendar.SATURDAY
+                                "sun" -> Calendar.SUNDAY
+                                else -> dayMap[token]
+                            }
+                        }.distinct()
+                        return if (resolved.isNotEmpty()) resolved else null
+                    }
+
+                    fun extractTimeHM(text: String): Pair<Int, Int>? {
+                        val timeRegex = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE)
+                        val mr = timeRegex.find(text) ?: return null
+                        val h = mr.groupValues.getOrNull(1)?.toIntOrNull() ?: return null
+                        val min = mr.groupValues.getOrNull(2).orEmpty().ifBlank { "0" }.toIntOrNull() ?: 0
+                        val ampmStr = mr.groupValues.getOrNull(3)?.lowercase(Locale.getDefault())
+                        var hour24 = h
+                        if (ampmStr == "pm" && h in 1..11) hour24 = h + 12
+                        if (ampmStr == "am" && h == 12) hour24 = 0
+                        if (hour24 in 0..23 && min in 0..59) return hour24 to min
+                        return null
+                    }
+
+                    val isDaily = lower.contains("everyday") || lower.contains("every day") || lower.contains("daily")
+                    val isWeekday = lower.contains("every weekday")
+                    val isWeekend = lower.contains("every weekend")
+                    val isSpecificDay = dayMap.keys.any { lower.contains("every $it") }
+                    val fromParen = parseEveryParentheses(lower)
+
+                    val recurringDetected = isDaily || isWeekday || isWeekend || isSpecificDay || (fromParen != null)
+
+                    if (recurringDetected) {
+                        val hm = extractTimeHM(lower)
+                        if (hm == null) {
+                            val msg = ChatMessage("Please include a time, e.g. 7:00 AM.", Sender.App)
+                            messages.add(msg); onPersist(msg); finishOnce()
+                            onProcessingChange(false); return@launch
+                        }
+                        val (hour, minute) = hm
+
+                        val recurringDays: List<Int>? = when {
+                            isDaily -> null // daily => handled as recurringDays=null
+                            isWeekday -> listOf(
+                                Calendar.MONDAY, Calendar.TUESDAY, Calendar.WEDNESDAY, Calendar.THURSDAY, Calendar.FRIDAY
+                            )
+                            isWeekend -> listOf(Calendar.SATURDAY, Calendar.SUNDAY)
+                            isSpecificDay -> {
+                                val d = dayMap.entries.first { lower.contains("every ${it.key}") }.value
+                                listOf(d)
+                            }
+                            else -> fromParen // e.g., every (mon, wed, fri)
+                        }
+
+                        val firstTrigger: Long = if (recurringDays == null || recurringDays.size == 7) {
+                            AlarmHelper.computeNextDaily(hour, minute)
+                        } else {
+                            AlarmHelper.computeNextAmongDays(hour, minute, recurringDays)
+                        }
+
+                        val dao = AppDatabase.getDatabase(context).alarmDao()
+                        val row = Alarm(
+                            message = "Alarm",
+                            triggerTimeMillis = firstTrigger,
+                            isRecurring = true,
+                            recurringDays = recurringDays,
+                            initialNote = ""
+                        )
+                        val newId = dao.insert(row).toInt()
+                        AlarmHelper.scheduleAlarmClockPublic(context, "Alarm", firstTrigger, newId, "")
+
+                        val friendly = when {
+                            recurringDays == null -> "daily"
+                            recurringDays.size == 1 -> dayMap.entries.first { it.value == recurringDays.first() }.key.replaceFirstChar { it.uppercase() }
+                            recurringDays.size == 2 && recurringDays.containsAll(listOf(Calendar.SATURDAY, Calendar.SUNDAY)) -> "weekend"
+                            recurringDays.size == 5 && !recurringDays.contains(Calendar.SATURDAY) && !recurringDays.contains(Calendar.SUNDAY) -> "weekday"
+                            else -> "selected days"
+                        }
+                        val confirm = ChatMessage("Scheduled $friendly at %02d:%02d".format(hour, minute), Sender.App)
+                        messages.add(confirm); onPersist(confirm)
+                        finishOnce()
+                        onProcessingChange(false)
+                        return@launch
+                    }
+
+                    // Fallback to existing API path (unchanged) when no local recurring pattern
+                    val accumulated = buildAccumulatedInput(rawText)
                     val payload: Map<String, Any> = mapOf(
                         "objective" to "Alarm Generator",
                         "objective_key" to "alarm_generator",
@@ -670,7 +776,6 @@ fun InputSection(
                         return@launch
                     }
 
-                    // NEW: detect question; if present, ask and stop (do not schedule yet)
                     val rootEl = Json.parseToJsonElement(innerJson).jsonObject
                     val maybeQuestion = rootEl["question"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
                     if (maybeQuestion != null) {
@@ -678,7 +783,6 @@ fun InputSection(
                         return@launch
                     }
 
-                    // Existing parsing/scheduling flow remains unchanged
                     val parsed: AlarmContract = AlarmParser.parseAlarmJson(innerJson)
                     val (fixed, issues) = AlarmParser.validateAndFixAlarm(parsed)
                     Log.d("AlarmParser", "innerJson=$innerJson")
@@ -700,9 +804,9 @@ fun InputSection(
                     }
 
                     if (isoList.isEmpty()) {
-                        val lower = rawText.lowercase(Locale.getDefault()).replace("on", " ")
+                        val lower2 = rawText.lowercase(Locale.getDefault()).replace("on", " ")
                         val timeRegex = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE)
-                        val mr = timeRegex.find(lower)
+                        val mr = timeRegex.find(lower2)
                         if (mr != null) {
                             val h = mr.groupValues.getOrNull(1)?.toIntOrNull()
                             val min = mr.groupValues.getOrNull(2).orEmpty().ifBlank { "0" }.toIntOrNull()
@@ -755,10 +859,9 @@ fun InputSection(
                             initialNote = assistantReplyOrNote
                         )
                         val newId = dao.insert(row).toInt()
-                        AlarmHelper.scheduleAlarmClockPublic(context, title, whenMillis, newId)
+                        AlarmHelper.scheduleAlarmClockPublic(context, title, whenMillis, newId, assistantReplyOrNote)
                         scheduled++
                     }
-                    // Success or not, flow complete
                     finishOnce()
                 } catch (e: Exception) {
                     Log.e("ChatScreen", "Error", e)

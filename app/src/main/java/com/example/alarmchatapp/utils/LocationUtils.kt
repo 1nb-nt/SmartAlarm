@@ -1,4 +1,4 @@
-package com.example.alarmchatapp.utils
+/*package com.example.alarmchatapp.utils
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -23,3 +23,4 @@ object LocationUtils {
         }
     }
 }
+*/

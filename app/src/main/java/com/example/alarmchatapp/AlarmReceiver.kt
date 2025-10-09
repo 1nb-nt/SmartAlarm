@@ -41,7 +41,6 @@ class AlarmReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        // Handle dismiss first so it always clears
         if (intent.action == ACTION_DISMISS) {
             val id = intent.getIntExtra(EXTRA_ID, 0)
             stopAudio()
@@ -55,60 +54,38 @@ class AlarmReceiver : BroadcastReceiver() {
         val initialNote = intent.getStringExtra(EXTRA_NOTE) ?: ""
         val id = intent.getIntExtra(EXTRA_ID, 0)
         if (id == 0) {
-            Log.w("AlarmReceiver", "Missing EXTRA_ID")
-            return
+            Log.w("AlarmReceiver", "Missing EXTRA_ID"); return
         }
         if (!firedIds.add(id)) {
-            Log.d("AlarmReceiver", "Duplicate delivery for id=$id, skipping")
-            return
+            Log.d("AlarmReceiver", "Duplicate id=$id, skip"); return
         }
 
         val nm = context.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (nm.getNotificationChannel(CHANNEL_ID) == null) {
                 nm.createNotificationChannel(
-                    NotificationChannel(
-                        CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH
-                    ).apply {
+                    NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH).apply {
                         lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                         enableVibration(true)
-                        setSound(null, null) // sound via Ringtone
+                        setSound(null, null)
+                        description = "WOW Alarm full-screen alerts"
                     }
                 )
             }
         }
 
-        // Stop old audio if any
         runCatching { AlarmAudio.ringtone?.let { if (it.isPlaying) it.stop() } }
 
-        // Choose ringtone: saved URI or system default
         val prefs = context.getSharedPreferences("wow_prefs", Context.MODE_PRIVATE)
         val saved = prefs.getString("ringtone_uri", null)
         val chosen: Uri? = saved?.let { runCatching { Uri.parse(it) }.getOrNull() }
-
-        fun isPlayable(u: Uri?, ctx: Context): Boolean {
-            if (u == null) return false
-            return try {
-                ctx.contentResolver.openAssetFileDescriptor(u, "r")?.close()
-                true
-            } catch (_: Exception) {
-                false
-            }
-        }
-
-
         val fallback: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-
         val playUri = if (isPlayable(chosen, context)) chosen!! else fallback
-
         val tone: Ringtone? = runCatching { RingtoneManager.getRingtone(context, playUri) }
-            .getOrElse {
-                runCatching { RingtoneManager.getRingtone(context, fallback) }.getOrNull()
-            }
-
+            .getOrElse { runCatching { RingtoneManager.getRingtone(context, fallback) }.getOrNull() }
         tone?.let { rt ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 rt.isLooping = true
@@ -135,23 +112,16 @@ class AlarmReceiver : BroadcastReceiver() {
         AlarmAudio.vibrator = vibrator
 
         val fullIntent = Intent(context, AlarmActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_LABEL, message)
             putExtra(EXTRA_ID, id)
             putExtra(EXTRA_NOTE, initialNote)
         }
-        val fullPi = PendingIntent.getActivity(
-            context, id, fullIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or immutable()
-        )
+        val fullPi = PendingIntent.getActivity(context, id, fullIntent, PendingIntent.FLAG_UPDATE_CURRENT or immutable())
 
         val dismissPi = PendingIntent.getBroadcast(
             context, id + 1000,
-            Intent(context, AlarmReceiver::class.java)
-                .setAction(ACTION_DISMISS)
-                .putExtra(EXTRA_ID, id),
+            Intent(context, AlarmReceiver::class.java).setAction(ACTION_DISMISS).putExtra(EXTRA_ID, id),
             PendingIntent.FLAG_UPDATE_CURRENT or immutable()
         )
 
@@ -168,10 +138,8 @@ class AlarmReceiver : BroadcastReceiver() {
             .addAction(0, "Dismiss", dismissPi)
             .setFullScreenIntent(fullPi, true)
             .build()
-
         nm.notify(NOTIF_ID_BASE + id, notif)
 
-        // DB reschedule logic (placeholder)
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -179,42 +147,18 @@ class AlarmReceiver : BroadcastReceiver() {
                 val alarm = dao.getById(id) ?: return@launch
 
                 if (alarm.isRecurring) {
-                    val firedCal = Calendar.getInstance().apply {
-                        timeInMillis = alarm.triggerTimeMillis
-                    }
+                    val firedCal = Calendar.getInstance().apply { timeInMillis = alarm.triggerTimeMillis }
                     val hour = firedCal.get(Calendar.HOUR_OF_DAY)
                     val minute = firedCal.get(Calendar.MINUTE)
-
-                    val nextTrigger = when {
-                        alarm.recurringDays?.size == 7 -> {
-                            Calendar.getInstance().apply {
-                                set(Calendar.SECOND, 0)
-                                set(Calendar.MILLISECOND, 0)
-                                set(Calendar.HOUR_OF_DAY, hour)
-                                set(Calendar.MINUTE, minute)
-                                add(Calendar.DAY_OF_YEAR, 1)
-                            }.timeInMillis
-                        }
-                        !alarm.recurringDays.isNullOrEmpty() -> {
-                            com.example.alarmchatapp.utils.AlarmHelper
-                                .computeNextAmongDays(hour, minute, alarm.recurringDays!!)
-                        }
-                        else -> null
-                    }
-
-                    if (nextTrigger != null) {
-                        dao.update(alarm.copy(triggerTimeMillis = nextTrigger))
-                        com.example.alarmchatapp.utils.AlarmHelper
-                            .scheduleAlarmClockPublic(
-                                context,
-                                alarm.message,
-                                nextTrigger,
-                                alarm.id,
-                                alarm.initialNote ?: ""
-                            )
+                    val nextTrigger = if (alarm.recurringDays == null || alarm.recurringDays.size == 7) {
+                        com.example.alarmchatapp.utils.AlarmHelper.computeNextDaily(hour, minute)
                     } else {
-                        dao.delete(alarm)
+                        com.example.alarmchatapp.utils.AlarmHelper.computeNextAmongDays(hour, minute, alarm.recurringDays)
                     }
+                    dao.update(alarm.copy(triggerTimeMillis = nextTrigger))
+                    com.example.alarmchatapp.utils.AlarmHelper.scheduleAlarmClockPublic(
+                        context, alarm.message, nextTrigger, alarm.id, alarm.initialNote ?: ""
+                    )
                 } else {
                     dao.delete(alarm)
                     val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -234,6 +178,14 @@ class AlarmReceiver : BroadcastReceiver() {
 
     private fun immutable(): Int =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+
+    private fun isPlayable(u: Uri?, ctx: Context): Boolean {
+        if (u == null) return false
+        return try {
+            ctx.contentResolver.openAssetFileDescriptor(u, "r")?.close()
+            true
+        } catch (_: Exception) { false }
+    }
 
     private fun stopAudio() {
         runCatching { AlarmAudio.ringtone?.let { if (it.isPlaying) it.stop() } }

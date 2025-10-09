@@ -34,7 +34,7 @@ object AlarmHelper {
             }
         }
 
-        // Show intent (affordance)
+        // Affordance shown in clock UI
         val showIntent = Intent(context, AlarmActivity::class.java).apply {
             action = "SHOW_ALARM_UI_$alarmId"
             putExtra(AlarmReceiver.EXTRA_LABEL, label)
@@ -46,7 +46,7 @@ object AlarmHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or immutable()
         )
 
-        // Fire broadcast
+        // Alarm fires to BroadcastReceiver
         val fireIntent = Intent(context, AlarmReceiver::class.java).apply {
             action = "FIRE_ALARM_$alarmId"
             putExtra(AlarmReceiver.EXTRA_LABEL, label)
@@ -62,6 +62,7 @@ object AlarmHelper {
         am.setAlarmClock(info, firePi)
     }
 
+    // Next occurrence among selected days of week (Calendar.DAY_OF_WEEK values 1..7)
     fun computeNextAmongDays(hour: Int, minute: Int, days: List<Int>): Long {
         val now = Calendar.getInstance()
         val base = Calendar.getInstance().apply {
@@ -71,14 +72,12 @@ object AlarmHelper {
             set(Calendar.MINUTE, minute)
         }
 
-        val todayDow = now.get(Calendar.DAY_OF_WEEK)
+        val today = now.get(Calendar.DAY_OF_WEEK)
         var bestDiff = Int.MAX_VALUE
 
         for (dow in days) {
-            var diff = dow - todayDow
-            if (diff < 0 || (diff == 0 && base.timeInMillis <= now.timeInMillis)) {
-                diff += 7
-            }
+            var diff = dow - today
+            if (diff < 0 || (diff == 0 && base.timeInMillis <= now.timeInMillis)) diff += 7
             if (diff < bestDiff) bestDiff = diff
         }
 
@@ -86,9 +85,21 @@ object AlarmHelper {
             base.add(Calendar.DAY_OF_YEAR, 1)
             return base.timeInMillis
         }
-
         base.add(Calendar.DAY_OF_YEAR, bestDiff)
         return base.timeInMillis
+    }
+
+    // Daily helper: next same time today if future, else tomorrow
+    fun computeNextDaily(hour: Int, minute: Int): Long {
+        val now = Calendar.getInstance()
+        val next = Calendar.getInstance().apply {
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
+        }
+        if (next.timeInMillis <= now.timeInMillis) next.add(Calendar.DAY_OF_YEAR, 1)
+        return next.timeInMillis
     }
 
     private fun immutable(): Int =
