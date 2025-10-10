@@ -14,6 +14,17 @@ import java.util.Calendar
 
 object AlarmHelper {
 
+    // Map short day names from API to Calendar constants
+    val dayShortToCal = mapOf(
+        "Sun" to Calendar.SUNDAY,
+        "Mon" to Calendar.MONDAY,
+        "Tue" to Calendar.TUESDAY,
+        "Wed" to Calendar.WEDNESDAY,
+        "Thu" to Calendar.THURSDAY,
+        "Fri" to Calendar.FRIDAY,
+        "Sat" to Calendar.SATURDAY
+    )
+
     fun scheduleAlarmClockPublic(
         context: Context,
         label: String,
@@ -34,7 +45,6 @@ object AlarmHelper {
             }
         }
 
-        // Show intent (affordance)
         val showIntent = Intent(context, AlarmActivity::class.java).apply {
             action = "SHOW_ALARM_UI_$alarmId"
             putExtra(AlarmReceiver.EXTRA_LABEL, label)
@@ -46,7 +56,6 @@ object AlarmHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or immutable()
         )
 
-        // Fire broadcast
         val fireIntent = Intent(context, AlarmReceiver::class.java).apply {
             action = "FIRE_ALARM_$alarmId"
             putExtra(AlarmReceiver.EXTRA_LABEL, label)
@@ -62,9 +71,13 @@ object AlarmHelper {
         am.setAlarmClock(info, firePi)
     }
 
-    fun computeNextAmongDays(hour: Int, minute: Int, days: List<Int>): Long {
-        val now = Calendar.getInstance()
+    // Compute the nearest future trigger among selected weekdays at hour:minute in device timezone.
+    fun computeNextAmongDays(hour: Int, minute: Int, days: List<Int>, nowMs: Long = System.currentTimeMillis()): Long {
+        require(days.isNotEmpty()) { "days must not be empty" }
+
+        val now = Calendar.getInstance().apply { timeInMillis = nowMs }
         val base = Calendar.getInstance().apply {
+            timeInMillis = nowMs
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
             set(Calendar.HOUR_OF_DAY, hour)
@@ -74,7 +87,7 @@ object AlarmHelper {
         val todayDow = now.get(Calendar.DAY_OF_WEEK)
         var bestDiff = Int.MAX_VALUE
 
-        for (dow in days) {
+        for (dow in days.distinct()) {
             var diff = dow - todayDow
             if (diff < 0 || (diff == 0 && base.timeInMillis <= now.timeInMillis)) {
                 diff += 7

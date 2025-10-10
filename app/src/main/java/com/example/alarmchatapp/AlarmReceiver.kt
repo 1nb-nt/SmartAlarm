@@ -96,7 +96,6 @@ class AlarmReceiver : BroadcastReceiver() {
             }
         }
 
-
         val fallback: Uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
             ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
@@ -171,7 +170,6 @@ class AlarmReceiver : BroadcastReceiver() {
 
         nm.notify(NOTIF_ID_BASE + id, notif)
 
-        // DB reschedule logic (placeholder)
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -186,15 +184,19 @@ class AlarmReceiver : BroadcastReceiver() {
                     val minute = firedCal.get(Calendar.MINUTE)
 
                     val nextTrigger = when {
+                        // Every day
                         alarm.recurringDays?.size == 7 -> {
                             Calendar.getInstance().apply {
                                 set(Calendar.SECOND, 0)
                                 set(Calendar.MILLISECOND, 0)
                                 set(Calendar.HOUR_OF_DAY, hour)
                                 set(Calendar.MINUTE, minute)
-                                add(Calendar.DAY_OF_YEAR, 1)
+                                if (timeInMillis <= System.currentTimeMillis()) {
+                                    add(Calendar.DAY_OF_YEAR, 1)
+                                }
                             }.timeInMillis
                         }
+                        // Specific weekdays
                         !alarm.recurringDays.isNullOrEmpty() -> {
                             com.example.alarmchatapp.utils.AlarmHelper
                                 .computeNextAmongDays(hour, minute, alarm.recurringDays!!)
@@ -227,6 +229,7 @@ class AlarmReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
                 Log.e("AlarmReceiver", "Error handling alarm id=$id", e)
             } finally {
+                firedIds.remove(id)
                 pending.finish()
             }
         }
