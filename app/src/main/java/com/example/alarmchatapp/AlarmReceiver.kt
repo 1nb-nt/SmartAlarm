@@ -184,7 +184,6 @@ class AlarmReceiver : BroadcastReceiver() {
                     val minute = firedCal.get(Calendar.MINUTE)
 
                     val nextTrigger = when {
-                        // Every day
                         alarm.recurringDays?.size == 7 -> {
                             Calendar.getInstance().apply {
                                 set(Calendar.SECOND, 0)
@@ -196,7 +195,6 @@ class AlarmReceiver : BroadcastReceiver() {
                                 }
                             }.timeInMillis
                         }
-                        // Specific weekdays
                         !alarm.recurringDays.isNullOrEmpty() -> {
                             com.example.alarmchatapp.utils.AlarmHelper
                                 .computeNextAmongDays(hour, minute, alarm.recurringDays!!)
@@ -218,13 +216,9 @@ class AlarmReceiver : BroadcastReceiver() {
                         dao.delete(alarm)
                     }
                 } else {
+                    // one-time alarms: remove row and explicitly cancel the matching PI
                     dao.delete(alarm)
-                    val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-                    val cancelPi = PendingIntent.getBroadcast(
-                        context, id, Intent(context, AlarmReceiver::class.java),
-                        PendingIntent.FLAG_UPDATE_CURRENT or immutable()
-                    )
-                    am.cancel(cancelPi)
+                    com.example.alarmchatapp.utils.AlarmHelper.cancelAlarm(context, id)
                 }
             } catch (e: Exception) {
                 Log.e("AlarmReceiver", "Error handling alarm id=$id", e)

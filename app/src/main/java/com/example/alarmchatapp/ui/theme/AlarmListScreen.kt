@@ -34,7 +34,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -51,6 +50,7 @@ fun AlarmListScreen(onBack: () -> Unit) {
     }
 
     Column(modifier = Modifier.padding(16.dp)) {
+        Spacer(Modifier.height(28.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -61,23 +61,17 @@ fun AlarmListScreen(onBack: () -> Unit) {
         }
         Spacer(Modifier.height(8.dp))
         LazyColumn {
-            items(items) { alarm ->
+            items(items, key = { it.id }) { alarm ->
                 AlarmRow(
                     alarm = alarm,
                     onDelete = {
                         runBlocking {
                             val dao = AppDatabase.getDatabase(context).alarmDao()
+                            // Cancel the scheduled PendingIntent first
+                            AlarmHelper.cancelAlarm(context, alarm.id)
                             withContext(Dispatchers.IO) { dao.delete(alarm) }
                         }
                         items.remove(alarm)
-                    },
-                    onReschedule = {
-                        AlarmHelper.scheduleAlarmClockPublic(
-                            context,
-                            alarm.message,
-                            alarm.triggerTimeMillis,
-                            alarm.id
-                        )
                     }
                 )
             }
@@ -88,8 +82,7 @@ fun AlarmListScreen(onBack: () -> Unit) {
 @Composable
 private fun AlarmRow(
     alarm: Alarm,
-    onDelete: () -> Unit,
-    onReschedule: () -> Unit
+    onDelete: () -> Unit
 ) {
     val sdf = remember { SimpleDateFormat("EEE, dd MMM yyyy HH:mm", Locale.getDefault()) }
     Card(
@@ -106,9 +99,8 @@ private fun AlarmRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.End
             ) {
-                Button(onClick = onReschedule) { Text("Reschedule") }
                 IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, contentDescription = "Delete") }
             }
         }

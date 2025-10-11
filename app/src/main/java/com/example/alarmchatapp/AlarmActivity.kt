@@ -59,11 +59,11 @@ class AlarmActivity : ComponentActivity() {
                         if (initialNote.isNotBlank()) {
                             // Centered marquee for the initial note
                             Text(
-                                text = initialNote,
+                                text = message,
                                 modifier = Modifier
                                     .width(300.dp)
                                     .basicMarquee(iterations = Int.MAX_VALUE),
-                                color = Color(0xFFFFF59D),
+                                color =Color.White,
                                 style = MaterialTheme.typography.titleLarge,
                                 textAlign = TextAlign.Center,
                                 maxLines = 1,
@@ -72,12 +72,6 @@ class AlarmActivity : ComponentActivity() {
 
                             Spacer(Modifier.height(24.dp))
                         }
-
-                        Text(
-                            text = message,
-                            color = Color.White,
-                            fontSize = 30.sp
-                        )
 
                         Spacer(Modifier.height(28.dp))
 

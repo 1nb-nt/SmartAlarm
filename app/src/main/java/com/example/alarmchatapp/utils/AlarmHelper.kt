@@ -45,6 +45,7 @@ object AlarmHelper {
             }
         }
 
+        // Full-screen activity affordance shown by AlarmClockInfo
         val showIntent = Intent(context, AlarmActivity::class.java).apply {
             action = "SHOW_ALARM_UI_$alarmId"
             putExtra(AlarmReceiver.EXTRA_LABEL, label)
@@ -56,6 +57,7 @@ object AlarmHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or immutable()
         )
 
+        // Broadcast that actually fires — unique action per id so cancel() matches exactly
         val fireIntent = Intent(context, AlarmReceiver::class.java).apply {
             action = "FIRE_ALARM_$alarmId"
             putExtra(AlarmReceiver.EXTRA_LABEL, label)
@@ -102,6 +104,20 @@ object AlarmHelper {
 
         base.add(Calendar.DAY_OF_YEAR, bestDiff)
         return base.timeInMillis
+    }
+
+    // New: helper to cancel a scheduled alarm by id (call this before deleting DB row)
+    fun cancelAlarm(context: Context, alarmId: Int) {
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val fireIntent = Intent(context, AlarmReceiver::class.java).apply {
+            action = "FIRE_ALARM_$alarmId"
+            putExtra(AlarmReceiver.EXTRA_ID, alarmId)
+        }
+        val firePi = PendingIntent.getBroadcast(
+            context, alarmId, fireIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or mutableIfS()
+        )
+        am.cancel(firePi)
     }
 
     private fun immutable(): Int =
