@@ -56,21 +56,33 @@ class AlarmActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        if (initialNote.isNotBlank()) {
-                            // Centered marquee for the initial note
+                        // Primary line: show initial note if present, else message
+                        val primaryText = if (initialNote.isNotBlank()) initialNote else message
+
+                        Text(
+                            text = primaryText,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .basicMarquee(iterations = Int.MAX_VALUE),
+                            color = Color.White,
+                            style = MaterialTheme.typography.headlineMedium,
+                            textAlign = TextAlign.Center,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
+                        // Optional secondary line: show message only when a distinct note exists
+                        if (initialNote.isNotBlank() && initialNote != message) {
+                            Spacer(Modifier.height(8.dp))
                             Text(
                                 text = message,
-                                modifier = Modifier
-                                    .width(300.dp)
-                                    .basicMarquee(iterations = Int.MAX_VALUE),
-                                color =Color.White,
-                                style = MaterialTheme.typography.titleLarge,
+                                modifier = Modifier.fillMaxWidth(),
+                                color = Color(0xFFBDBDBD),
+                                style = MaterialTheme.typography.titleSmall,
                                 textAlign = TextAlign.Center,
-                                maxLines = 1,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
-
-                            Spacer(Modifier.height(24.dp))
                         }
 
                         Spacer(Modifier.height(28.dp))
@@ -89,12 +101,10 @@ class AlarmActivity : ComponentActivity() {
                                 finish()
                             }) { Text("Snooze 5 min") }
 
-                            Button(onClick = {
-                                sendDismiss(id)
-                                finish()
-                            }) { Text("Dismiss") }
+                            Button(onClick = { sendDismiss(id); finish() }) { Text("Dismiss") }
                         }
                     }
+
                 }
             }
         }

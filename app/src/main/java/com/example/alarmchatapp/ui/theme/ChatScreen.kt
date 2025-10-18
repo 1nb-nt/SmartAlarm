@@ -634,7 +634,7 @@ fun InputSection(
                 try {
                     onProcessingChange(true)
 
-                    // NEW: build accumulated prompt for the platform
+                    // Build accumulated context for API
                     val accumulated = buildAccumulatedInput(rawText)
 
                     val payload: Map<String, Any> = mapOf(
@@ -646,63 +646,54 @@ fun InputSection(
 
                     val http = RetrofitClient.instance.getAlarmDetailsRaw(payload)
                     if (!http.isSuccessful) {
-                        messages.add(ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
-                        messages.add(ChatMessage("Retry ▶", Sender.App))
-                        onPersist(ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
-                        onPersist(ChatMessage("Retry ▶", Sender.App))
-                        finishOnce()
-                        return@launch
+                        val t = "Timeout or server error (${http.code()}). Tap to retry."
+                        messages.add(ChatMessage(t, Sender.App)); onPersist(ChatMessage(t, Sender.App))
+                        messages.add(ChatMessage("Retry ▶", Sender.App)); onPersist(ChatMessage("Retry ▶", Sender.App))
+                        finishOnce(); return@launch
                     }
                     val bodyStr = http.body()?.string().orEmpty()
                     if (bodyStr.isBlank()) {
-                        messages.add(ChatMessage("No response received. Tap to retry.", Sender.App))
-                        messages.add(ChatMessage("Retry ▶", Sender.App))
-                        onPersist(ChatMessage("No response received. Tap to retry.", Sender.App))
-                        onPersist(ChatMessage("Retry ▶", Sender.App))
-                        finishOnce()
-                        return@launch
+                        val t = "No response received. Tap to retry."
+                        messages.add(ChatMessage(t, Sender.App)); onPersist(ChatMessage(t, Sender.App))
+                        messages.add(ChatMessage("Retry ▶", Sender.App)); onPersist(ChatMessage("Retry ▶", Sender.App))
+                        finishOnce(); return@launch
                     }
 
                     val innerJson = extractInnerJsonFromResponse(bodyStr)
                     if (innerJson == null) {
-                        messages.add(ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
-                        onPersist(ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
-                        finishOnce()
-                        return@launch
+                        val t = "Please provide details for the alarm you'd like to set."
+                        messages.addOnce(t, onPersist)
+                        finishOnce(); return@launch
                     }
 
-                    // NEW: detect question; if present, ask and stop (do not schedule yet)
                     val rootEl = Json.parseToJsonElement(innerJson).jsonObject
+
+                    // If API asks a follow-up question, ask and stop — no scheduling yet.
                     val maybeQuestion = rootEl["question"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
                     if (maybeQuestion != null) {
                         onFlowAwaitQuestion(maybeQuestion)
                         return@launch
                     }
 
-                    // Parse + validate the alarm from server JSON
+                    // Parse contract
                     val parsed: AlarmContract = AlarmParser.parseAlarmJson(innerJson)
                     val (fixed, issues) = AlarmParser.validateAndFixAlarm(parsed)
-                    Log.d("AlarmParser", "innerJson=$innerJson")
-                    Log.d("AlarmParser", "fixed.notification=${fixed.notification}")
-                    issues.forEach { Log.d("AlarmParser", it) }
 
                     val assistantReply = fixed.responseText?.trim().orEmpty()
                     if (assistantReply.isNotEmpty()) {
                         val appMsg = ChatMessage(assistantReply, Sender.App)
-                        messages.add(appMsg)
-                        onPersist(appMsg)
+                        messages.add(appMsg); onPersist(appMsg)
                     }
 
                     val title = (fixed.title ?: "").ifBlank { "Alarm" }
 
-                    // Detect recurrence from JSON: allow ["Mon","Tue"] or comma string "Mon,Wed" or "daily"
-                    val rootElObj = Json.parseToJsonElement(innerJson).jsonObject
-                    val recurrenceAny = rootElObj["recurrence"]
-                    val recurrenceShort: List<String>? = when {
-                        recurrenceAny == null || recurrenceAny.toString() == "null" -> null
-                        recurrenceAny is kotlinx.serialization.json.JsonArray ->
+                    // Recurrence extraction
+                    val recurrenceAny = rootEl["recurrence"]
+                    val recurrenceShort: List<String>? = when (recurrenceAny) {
+                        null -> null
+                        is kotlinx.serialization.json.JsonArray ->
                             recurrenceAny.mapNotNull { it.jsonPrimitive.contentOrNull }.filter { it.isNotBlank() }
-                        recurrenceAny is kotlinx.serialization.json.JsonPrimitive -> {
+                        is kotlinx.serialization.json.JsonPrimitive -> {
                             val s = recurrenceAny.contentOrNull?.trim()?.lowercase(Locale.getDefault())
                             when {
                                 s.isNullOrBlank() -> null
@@ -714,19 +705,15 @@ fun InputSection(
                         else -> null
                     }
 
-
-                    // Build a list of ISO datetimes to use for one-time scheduling if there is no recurrence
+                    // ISO candidates for one‑time schedule
                     var isoList: List<String> = fixed.notification
-                    if (isoList.isEmpty() && !fixed.datetime.isNullOrBlank()) {
-                        isoList = listOf(fixed.datetime!!)
-                    }
+                    if (isoList.isEmpty() && !fixed.datetime.isNullOrBlank()) isoList = listOf(fixed.datetime!!)
 
-                    // Fallback: parse a time from the raw text if API didn’t provide anything concrete
+                    // Lightweight fallback parse from user text
                     if (isoList.isEmpty()) {
                         val lower = rawText.lowercase(Locale.getDefault()).replace("on", " ")
                         val timeRegex = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE)
-                        val mr = timeRegex.find(lower)
-                        if (mr != null) {
+                        timeRegex.find(lower)?.let { mr ->
                             val h = mr.groupValues.getOrNull(1)?.toIntOrNull()
                             val min = mr.groupValues.getOrNull(2).orEmpty().ifBlank { "0" }.toIntOrNull()
                             val ampmStr = mr.groupValues.getOrNull(3)?.lowercase(Locale.getDefault())
@@ -748,88 +735,89 @@ fun InputSection(
                         }
                     }
 
-                    if (recurrenceShort != null && recurrenceShort.isNotEmpty()) {
-                        // Recurring path: require a base datetime and a time
+                    val hasIsoCandidates = isoList.isNotEmpty()
+                    val hasRecurrence = !recurrenceShort.isNullOrEmpty()
+
+                    // EARLY EXIT: if neither concrete time nor recurrence is available, ask details and STOP.
+                    if (!hasIsoCandidates && !hasRecurrence) {
+                        val t = "Please provide details for the alarm you'd like to set."
+                        messages.addOnce(t, onPersist)
+                        finishOnce(); return@launch
+                    }
+
+                    // Scheduling confirmation helper
+                    fun confirm(epochMs: Long) {
+                        messages.addOnce("Your reminder has been set for ${formatLocalTime(epochMs)}.", onPersist)
+                        finishOnce()
+                    }
+
+                    val dao = AppDatabase.getDatabase(context).alarmDao()
+
+                    if (hasIsoCandidates) {
+                        val nowMs = System.currentTimeMillis()
+                        val times = isoList.mapNotNull { runCatching { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() }.getOrNull() }
+                            .filter { it > nowMs }.distinct().sorted()
+                        if (times.isEmpty()) {
+                            val t = "Please provide details for the alarm you'd like to set."
+                            messages.addOnce(t, onPersist)
+                            finishOnce(); return@launch
+                        }
+                        val note = assistantReply.ifBlank { fixed.responseText.orEmpty() }
+                        val firstEpoch = times.first()
+                        val row = Alarm(message = title, triggerTimeMillis = firstEpoch, isRecurring = false, recurringDays = null, initialNote = note)
+                        val newId = dao.insert(row).toInt()
+                        val ok = runCatching {
+                            AlarmHelper.scheduleAlarmClockPublic(context, title, firstEpoch, newId, note)
+                        }.isSuccess
+                        if (ok) { confirm(firstEpoch); return@launch }
+                        val t = "Couldn’t schedule yet. Please check exact alarm permission and try again."
+                        messages.addOnce(t, onPersist); finishOnce(); return@launch
+                    }
+
+                    // Recurrence path (if provided)
+                    if (hasRecurrence) {
                         val baseIso = when {
                             !fixed.datetime.isNullOrBlank() -> fixed.datetime!!
                             isoList.isNotEmpty() -> isoList.first()
                             else -> {
-                                messages.add(ChatMessage("Need a date/time to anchor the recurrence; please specify time.", Sender.App))
-                                onPersist(ChatMessage("Need a date/time to anchor the recurrence; please specify time.", Sender.App))
-                                finishOnce()
-                                return@launch
+                                val t = "Please provide details for the alarm you'd like to set."
+                                messages.addOnce(t, onPersist); finishOnce(); return@launch
                             }
                         }
-                        val time24 = fixed.time?.takeIf { it.matches(Regex("""^\d{1,2}:\d{2}$""")) } ?: run {
+                        val t24 = fixed.time?.takeIf { it.matches(Regex("""^\d{1,2}:\d{2}$""")) } ?: run {
                             val t = runCatching { java.time.OffsetDateTime.parse(baseIso).toLocalTime() }.getOrNull()
                             if (t != null) "%02d:%02d".format(t.hour, t.minute) else null
                         }
-                        if (time24 == null) {
-                            messages.add(ChatMessage("Time missing for recurring alarm; please provide time.", Sender.App))
-                            onPersist(ChatMessage("Time missing for recurring alarm; please provide time.", Sender.App))
-                            finishOnce()
-                            return@launch
+                        if (t24 == null) {
+                            val t = "Please provide details for the alarm you'd like to set."
+                            messages.addOnce(t, onPersist); finishOnce(); return@launch
                         }
-                        val timezone = fixed.timezone ?: java.time.ZoneId.systemDefault().id
+                        val tz = fixed.timezone ?: java.time.ZoneId.systemDefault().id
                         val api = ApiAlarm(
                             title = title,
                             datetimeIso = baseIso,
-                            time24 = time24,
-                            timezone = timezone,
+                            time24 = t24,
+                            timezone = tz,
                             recurrenceShort = recurrenceShort,
                             initialNote = assistantReply.ifBlank { fixed.responseText.orEmpty() }
                         )
                         val (alarmRow, firstEpoch) = ApiAlarmMapper.toAlarmAndEpoch(api)
-                        val dao = AppDatabase.getDatabase(context).alarmDao()
                         val newId = dao.insert(alarmRow).toInt()
                         val saved = alarmRow.copy(id = newId)
-                        AlarmHelper.scheduleAlarmClockPublic(
-                            context, saved.message, saved.triggerTimeMillis, saved.id, saved.initialNote ?: ""
-                        )
-                    } else {
-                        // One-time path: schedule each future epoch provided
-                        if (isoList.isEmpty()) {
-                            messages.add(ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
-                            onPersist(ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
-                            finishOnce()
-                            return@launch
-                        }
-                        val nowMs = System.currentTimeMillis()
-                        val times: List<Long> = isoList.mapNotNull { iso ->
-                            runCatching { java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrNull()
-                        }.filter { it > nowMs }.distinct().sorted()
-                        if (times.isEmpty()) {
-                            messages.add(ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
-                            onPersist(ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
-                            finishOnce()
-                            return@launch
-                        }
-
-                        val dao = AppDatabase.getDatabase(context).alarmDao()
-                        val assistantReplyOrNote = assistantReply.ifBlank { fixed.responseText.orEmpty() }
-                        for (whenMillis in times) {
-                            val row = Alarm(
-                                message = title,
-                                triggerTimeMillis = whenMillis,
-                                isRecurring = false,
-                                recurringDays = null,
-                                initialNote = assistantReplyOrNote
-                            )
-                            val newId = dao.insert(row).toInt()
-                            AlarmHelper.scheduleAlarmClockPublic(
-                                context, title, whenMillis, newId, assistantReplyOrNote
-                            )
-                        }
+                        val ok = runCatching {
+                            AlarmHelper.scheduleAlarmClockPublic(context, saved.message, saved.triggerTimeMillis, saved.id, saved.initialNote ?: "")
+                        }.isSuccess
+                        if (ok) { confirm(firstEpoch); return@launch }
+                        val t = "Couldn’t schedule yet. Please check exact alarm permission and try again."
+                        messages.addOnce(t, onPersist); finishOnce(); return@launch
                     }
 
-                    // Success or not, flow complete
+                    // Should not reach here
                     finishOnce()
                 } catch (e: Exception) {
                     Log.e("ChatScreen", "Error", e)
                     val err = ChatMessage("Failed: ${e.localizedMessage ?: "Unknown error"}", Sender.App)
-                    messages.add(err)
-                    onPersist(err)
-                    finishOnce()
+                    messages.add(err); onPersist(err); finishOnce()
                 } finally {
                     onProcessingChange(false)
                 }
@@ -837,7 +825,30 @@ fun InputSection(
         }) {
             Icon(imageVector = Icons.Filled.Send, contentDescription = "Send")
         }
+
     }
+}
+
+private fun formatLocalTime(epoch: Long): String =
+    java.time.Instant.ofEpochMilli(epoch)
+        .atZone(java.time.ZoneId.systemDefault())
+        .toLocalDateTime()
+        .let { dt ->
+            val time = dt.toLocalTime()
+            val h = time.hour % 12
+            val hour12 = if (h == 0) 12 else h
+            val m = time.minute.toString().padStart(2, '0')
+            val ampm = if (time.hour < 12) "am" else "pm"
+            "${dt.toLocalDate()} at $hour12:$m $ampm"
+        }
+
+private fun MutableList<ChatMessage>.addOnce(
+    text: String,
+    persist: (ChatMessage) -> Unit
+) {
+    val msg = ChatMessage(text, Sender.App)
+    add(msg)
+    persist(msg)
 }
 
 private fun extractInnerJsonFromResponse(raw: String): String? {
