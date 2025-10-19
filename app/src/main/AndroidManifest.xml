@@ -15,8 +15,6 @@
     <!-- Network/location (used by Chat/API/location utils) -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- Optional legacy SET_ALARM (not required for AlarmClockInfo) -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />

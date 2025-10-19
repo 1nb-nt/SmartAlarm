@@ -114,9 +114,7 @@ fun ChatScreen(onShow: () -> Unit) {
     val db = remember { AppDatabase.getDatabase(context) }
     val chatDao: ChatDao = remember { db.chatDao() }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* no-op */ }
+
 
     // Ringtone picker launcher
     val pickSound = rememberLauncherForActivityResult(
@@ -133,11 +131,6 @@ fun ChatScreen(onShow: () -> Unit) {
     }
 
     LaunchedEffect(Unit) {
-        val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // perms.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-        if (perms.isNotEmpty()) permissionLauncher.launch(perms.toTypedArray())
 
         val now = System.currentTimeMillis()
         val last24 = withContext(Dispatchers.IO) { chatDao.lastSince(now - 24L * 60L * 60L * 1000L) }
