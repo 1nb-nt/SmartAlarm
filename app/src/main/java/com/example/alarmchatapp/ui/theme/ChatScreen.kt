@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -99,9 +100,12 @@ fun ChatScreen(onShow: () -> Unit) {
     var isTyping by remember { mutableStateOf(false) }
 
     // iterative Q&A flow state
-    var accumulator by remember { mutableStateOf<String?>(null) }     // carries all user texts in current flow
-    var pendingQuestion by remember { mutableStateOf<String?>(null) } // last asked question, if any
-    var inFlow by remember { mutableStateOf(false) }                   // whether awaiting follow-up
+    var accumulator by remember { mutableStateOf<String?>(null) }
+    var pendingQuestion by remember { mutableStateOf<String?>(null) }
+    var inFlow by remember { mutableStateOf(false) }
+
+    // clarify-first/fail-second counter
+    var noTimeAttempts by remember { mutableStateOf(0) }
 
     // Show home again after each attempt finishes
     var alarmHandled by remember { mutableStateOf(false) }
@@ -131,12 +135,9 @@ fun ChatScreen(onShow: () -> Unit) {
     LaunchedEffect(Unit) {
         val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Optionally request POST_NOTIFICATIONS if desired
             // perms.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        if (perms.isNotEmpty()) {
-            permissionLauncher.launch(perms.toTypedArray())
-        }
+        if (perms.isNotEmpty()) permissionLauncher.launch(perms.toTypedArray())
 
         val now = System.currentTimeMillis()
         val last24 = withContext(Dispatchers.IO) { chatDao.lastSince(now - 24L * 60L * 60L * 1000L) }
@@ -175,7 +176,17 @@ fun ChatScreen(onShow: () -> Unit) {
                         .padding(horizontal = 12.dp, vertical = 12.dp)
                 ) {
                     Text("WOW Panel", style = MaterialTheme.typography.titleMedium)
+                    val ver = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull() }
+                    val versionLabel = buildString {
+                        append("Version ")
+                        if (ver != null) {
+                            // Prefer versionName if available; fall back to longVersionCode
+                            append(ver.versionName ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) ver.longVersionCode.toString() else "1.0")
+                        } else append("1.0")
+                    }
+                    Text(versionLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,fontSize=12.sp)
                     Spacer(Modifier.height(8.dp))
+
                     Text(
                         "Manage Alarms",
                         modifier = Modifier
@@ -193,7 +204,6 @@ fun ChatScreen(onShow: () -> Unit) {
                                     putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select alarm sound")
                                     putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
                                     putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
-                                    // Pre-select existing if saved
                                     val saved = context.getSharedPreferences("wow_prefs", Context.MODE_PRIVATE)
                                         .getString("ringtone_uri", null)
                                     val existing = saved?.let { Uri.parse(it) }
@@ -308,7 +318,7 @@ fun ChatScreen(onShow: () -> Unit) {
                             if (input.text.isBlank()) isTyping = false
                         }
                     },
-                    // iterative flow lambdas
+                    // iterative flow hooks
                     buildAccumulatedInput = { rawText ->
                         val zone = ZoneId.systemDefault()
                         val ianaId = zone.id
@@ -323,7 +333,6 @@ fun ChatScreen(onShow: () -> Unit) {
                     onFlowAwaitQuestion = { q ->
                         val appMsg = ChatMessage(q, Sender.App)
                         messages.add(appMsg)
-                        // persist question asynchronously
                         scope.launch(Dispatchers.IO) {
                             chatDao.insert(
                                 ChatMessageEntity(
@@ -342,9 +351,70 @@ fun ChatScreen(onShow: () -> Unit) {
                         accumulator = null
                         alarmHandled = true
                         isTyping = false
-                    }
+                        noTimeAttempts = 0
+                    },
+                    // bridges for flow state
+                    inFlowGetter = { inFlow },
+                    inFlowSetter = { v -> inFlow = v },
+                    noTimeGetter = { noTimeAttempts },
+                    noTimeSetter = { v -> noTimeAttempts = v }
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun WelcomeSection(onCommandClick: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        val gradient = Brush.horizontalGradient(listOf(Color(0xFF6A1B9A), Color.Black))
+        Text(
+            text = buildAnnotatedString { withStyle(style = SpanStyle(brush = gradient)) { append("Welcome to WOW Assist") } },
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(text = "Try", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            FilterChip(
+                selected = false,
+                onClick = { onCommandClick("Wake me up at 5 AM daily") },
+                label = { Text("Wake me up at 5 AM daily") },
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier.weight(1f)
+            )
+            FilterChip(
+                selected = false,
+                onClick = { onCommandClick("Call mom every Friday at 7 PM") },
+                label = { Text("Call mom every Friday at 7 PM") },
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier.weight(1f)
+            )
+
+
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            FilterChip(
+                selected = false,
+                onClick = { onCommandClick("Meeting tomorrow 3 PM") },
+                label = { Text("Meeting tomorrow 3 PM") },
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier.weight(1f)
+            )
+
+            FilterChip(
+                selected = false,
+                onClick = { onCommandClick("Son's birthday on Oct 24; remind a week before") },
+                label = { Text("Son's birthday on Oct 24; remind a week before") },
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier.weight(1f)
+            )
+
         }
     }
 }
@@ -376,7 +446,6 @@ private fun ChatScrollableContent(
         if (showWelcome) {
             item { WelcomeSection(onCommandClick = onCommandClick) }
         }
-        // Ascending order; user (purple) then app (grey)
         items(messages) { msg ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -437,71 +506,6 @@ private fun WowLogoInline(isProcessing: Boolean, height: Dp) {
 }
 
 @Composable
-fun WelcomeSection(onCommandClick: (String) -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-    ) {
-        val gradient = Brush.horizontalGradient(listOf(Color(0xFF6A1B9A), Color.Black))
-        Text(
-            text = buildAnnotatedString {
-                withStyle(style = SpanStyle(brush = gradient)) { append("Welcome to WOW Assist") }
-            },
-            style = MaterialTheme.typography.headlineSmall,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "Try",
-            style = MaterialTheme.typography.titleMedium,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            FilterChip(
-                selected = false,
-                onClick = { onCommandClick("Wake me up at 5 AM daily") },
-                label = { Text("Wake me up at 5 AM daily") },
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier.weight(1f)
-            )
-            FilterChip(
-                selected = false,
-                onClick = { onCommandClick("Call mom every Friday at 7 PM") },
-                label = { Text("Call mom every Friday at 7 PM") },
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            FilterChip(
-                selected = false,
-                onClick = { onCommandClick("Meeting tomorrow 3 PM") },
-                label = { Text("Meeting tomorrow 3 PM") },
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier.weight(1f)
-            )
-            FilterChip(
-                selected = false,
-                onClick = { onCommandClick("Son's birthday on Oct 24; remind a week before") },
-                label = { Text("Son's birthday on Oct 24; remind a week before") },
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
-@Composable
 private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) {
     if (!isProcessing) return
     val infinite = rememberInfiniteTransition(label = "clock-spin")
@@ -519,7 +523,6 @@ private fun RotatingClockOverlay(isProcessing: Boolean, sizeDp: Dp) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val c = center
             val r = size.minDimension / 2f
-
             drawLine(
                 color = Color(0xFF6A1B9A),
                 start = c,
@@ -573,6 +576,7 @@ private fun MessageBubble(text: String, isUser: Boolean) {
         Text(text = text, color = fg, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
     }
 }
+
 @Composable
 fun InputSection(
     input: TextFieldValue,
@@ -585,15 +589,18 @@ fun InputSection(
     onProcessingChange: (Boolean) -> Unit = {},
     onFocusChange: (Boolean) -> Unit,
     onSubmit: () -> Unit,
-    // NEW: lightweight hooks to support Q&A without modifying working internals
     buildAccumulatedInput: (String) -> String,
     onFlowAwaitQuestion: (String) -> Unit,
-    onFlowComplete: () -> Unit
+    onFlowComplete: () -> Unit,
+    inFlowGetter: () -> Boolean,
+    inFlowSetter: (Boolean) -> Unit,
+    noTimeGetter: () -> Int,
+    noTimeSetter: (Int) -> Unit
 ) {
     var hasFocus by remember { mutableStateOf(false) }
 
     Row(
-        modifier = modifier, // carries imePadding from caller
+        modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
     ) {
         TextField(
@@ -623,6 +630,8 @@ fun InputSection(
             onInputChange(TextFieldValue(""))
             onSubmit()
 
+            if (!inFlowGetter()) noTimeSetter(0)
+
             scope.launch {
                 var finishedCalled = false
                 fun finishOnce() {
@@ -631,12 +640,46 @@ fun InputSection(
                         onFlowComplete()
                     }
                 }
+
+                fun handleNoTimeAndStop(clarifyText: String = "Please provide details for the alarm you'd like to set.") {
+                    val attempts = noTimeGetter()
+                    if (attempts == 0) {
+                        val t = clarifyText
+                        val msg = ChatMessage(t, Sender.App)
+                        messages.add(msg); onPersist(msg)
+                        noTimeSetter(1)
+                    } else {
+                        val fail = "No times from API or text; nothing scheduled."
+                        val msg = ChatMessage(fail, Sender.App)
+                        messages.add(msg); onPersist(msg)
+                        noTimeSetter(0)
+                        onFlowComplete()
+                    }
+                    finishOnce()
+                }
+
+                // Helpers for confirmation lines (date line only for custom dates)
+                fun isCustomDate(epochMs: Long): Boolean {
+                    val zone = java.time.ZoneId.systemDefault()
+                    val d = java.time.Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()
+                    val today = java.time.LocalDate.now(zone)
+                    val tomorrow = today.plusDays(1)
+                    return !(d == today || d == tomorrow)
+                }
+                fun makePrimaryTimeLine(epochMs: Long): String {
+                    val t = java.time.Instant.ofEpochMilli(epochMs)
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .toLocalTime()
+                    val h12 = if (t.hour % 12 == 0) 12 else (t.hour % 12)
+                    val mm = t.minute.toString().padStart(2, '0')
+                    val ampm = if (t.hour < 12) "am" else "pm"
+                    return "Your reminder is set for $h12:$mm $ampm."
+                }
+
                 try {
                     onProcessingChange(true)
 
-                    // NEW: build accumulated prompt for the platform
                     val accumulated = buildAccumulatedInput(rawText)
-
                     val payload: Map<String, Any> = mapOf(
                         "objective" to "Alarm Generator",
                         "objective_key" to "alarm_generator",
@@ -646,40 +689,33 @@ fun InputSection(
 
                     val http = RetrofitClient.instance.getAlarmDetailsRaw(payload)
                     if (!http.isSuccessful) {
-                        messages.add(ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
-                        messages.add(ChatMessage("Retry ▶", Sender.App))
-                        onPersist(ChatMessage("Timeout or server error (${http.code()}). Tap to retry.", Sender.App))
-                        onPersist(ChatMessage("Retry ▶", Sender.App))
-                        finishOnce()
-                        return@launch
+                        val t = "Timeout or server error (${http.code()}). Tap to retry."
+                        val a = ChatMessage(t, Sender.App); messages.add(a); onPersist(a)
+                        val b = ChatMessage("Retry ▶", Sender.App); messages.add(b); onPersist(b)
+                        finishOnce(); return@launch
                     }
                     val bodyStr = http.body()?.string().orEmpty()
                     if (bodyStr.isBlank()) {
-                        messages.add(ChatMessage("No response received. Tap to retry.", Sender.App))
-                        messages.add(ChatMessage("Retry ▶", Sender.App))
-                        onPersist(ChatMessage("No response received. Tap to retry.", Sender.App))
-                        onPersist(ChatMessage("Retry ▶", Sender.App))
-                        finishOnce()
-                        return@launch
+                        val t = "No response received. Tap to retry."
+                        val a = ChatMessage(t, Sender.App); messages.add(a); onPersist(a)
+                        val b = ChatMessage("Retry ▶", Sender.App); messages.add(b); onPersist(b)
+                        finishOnce(); return@launch
                     }
 
                     val innerJson = extractInnerJsonFromResponse(bodyStr)
                     if (innerJson == null) {
-                        messages.add(ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
-                        onPersist(ChatMessage("API returned no JSON block; nothing scheduled.", Sender.App))
-                        finishOnce()
+                        handleNoTimeAndStop()
                         return@launch
                     }
 
-                    // NEW: detect question; if present, ask and stop (do not schedule yet)
                     val rootEl = Json.parseToJsonElement(innerJson).jsonObject
                     val maybeQuestion = rootEl["question"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
                     if (maybeQuestion != null) {
                         onFlowAwaitQuestion(maybeQuestion)
+                        inFlowSetter(true)
                         return@launch
                     }
 
-                    // Parse + validate the alarm from server JSON
                     val parsed: AlarmContract = AlarmParser.parseAlarmJson(innerJson)
                     val (fixed, issues) = AlarmParser.validateAndFixAlarm(parsed)
                     Log.d("AlarmParser", "innerJson=$innerJson")
@@ -687,17 +723,9 @@ fun InputSection(
                     issues.forEach { Log.d("AlarmParser", it) }
 
                     val assistantReply = fixed.responseText?.trim().orEmpty()
-                    if (assistantReply.isNotEmpty()) {
-                        val appMsg = ChatMessage(assistantReply, Sender.App)
-                        messages.add(appMsg)
-                        onPersist(appMsg)
-                    }
-
                     val title = (fixed.title ?: "").ifBlank { "Alarm" }
 
-                    // Detect recurrence from JSON: allow ["Mon","Tue"] or comma string "Mon,Wed" or "daily"
-                    val rootElObj = Json.parseToJsonElement(innerJson).jsonObject
-                    val recurrenceAny = rootElObj["recurrence"]
+                    val recurrenceAny = rootEl["recurrence"]
                     val recurrenceShort: List<String>? = when {
                         recurrenceAny == null || recurrenceAny.toString() == "null" -> null
                         recurrenceAny is kotlinx.serialization.json.JsonArray ->
@@ -714,14 +742,11 @@ fun InputSection(
                         else -> null
                     }
 
-
-                    // Build a list of ISO datetimes to use for one-time scheduling if there is no recurrence
                     var isoList: List<String> = fixed.notification
                     if (isoList.isEmpty() && !fixed.datetime.isNullOrBlank()) {
                         isoList = listOf(fixed.datetime!!)
                     }
 
-                    // Fallback: parse a time from the raw text if API didn’t provide anything concrete
                     if (isoList.isEmpty()) {
                         val lower = rawText.lowercase(Locale.getDefault()).replace("on", " ")
                         val timeRegex = Regex("""\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b""", RegexOption.IGNORE_CASE)
@@ -748,15 +773,12 @@ fun InputSection(
                         }
                     }
 
-                    if (recurrenceShort != null && recurrenceShort.isNotEmpty()) {
-                        // Recurring path: require a base datetime and a time
+                    if (!recurrenceShort.isNullOrEmpty()) {
                         val baseIso = when {
                             !fixed.datetime.isNullOrBlank() -> fixed.datetime!!
                             isoList.isNotEmpty() -> isoList.first()
                             else -> {
-                                messages.add(ChatMessage("Need a date/time to anchor the recurrence; please specify time.", Sender.App))
-                                onPersist(ChatMessage("Need a date/time to anchor the recurrence; please specify time.", Sender.App))
-                                finishOnce()
+                                handleNoTimeAndStop("Please provide details for the alarm you'd like to set.")
                                 return@launch
                             }
                         }
@@ -765,9 +787,7 @@ fun InputSection(
                             if (t != null) "%02d:%02d".format(t.hour, t.minute) else null
                         }
                         if (time24 == null) {
-                            messages.add(ChatMessage("Time missing for recurring alarm; please provide time.", Sender.App))
-                            onPersist(ChatMessage("Time missing for recurring alarm; please provide time.", Sender.App))
-                            finishOnce()
+                            handleNoTimeAndStop("Please provide details for the alarm you'd like to set.")
                             return@launch
                         }
                         val timezone = fixed.timezone ?: java.time.ZoneId.systemDefault().id
@@ -783,15 +803,29 @@ fun InputSection(
                         val dao = AppDatabase.getDatabase(context).alarmDao()
                         val newId = dao.insert(alarmRow).toInt()
                         val saved = alarmRow.copy(id = newId)
-                        AlarmHelper.scheduleAlarmClockPublic(
-                            context, saved.message, saved.triggerTimeMillis, saved.id, saved.initialNote ?: ""
-                        )
+
+                        val ok = runCatching {
+                            AlarmHelper.scheduleAlarmClockPublic(
+                                context, saved.message, saved.triggerTimeMillis, saved.id, saved.initialNote ?: ""
+                            ); true
+                        }.getOrElse { false }
+
+                        if (ok) {
+                            val primary = makePrimaryTimeLine(firstEpoch)
+                            val msg1 = ChatMessage(primary, Sender.App); messages.add(msg1); onPersist(msg1)
+                            if (isCustomDate(firstEpoch)) {
+                                val secondary = "Your reminder has been set for ${formatLocalTime(firstEpoch)}."
+                                val msg2 = ChatMessage(secondary, Sender.App); messages.add(msg2); onPersist(msg2)
+                            }
+                            finishOnce(); return@launch
+                        } else {
+                            val fail = "Couldn’t create your alarm. Please allow exact alarms and try again."
+                            val msg = ChatMessage(fail, Sender.App); messages.add(msg); onPersist(msg)
+                            finishOnce(); return@launch
+                        }
                     } else {
-                        // One-time path: schedule each future epoch provided
                         if (isoList.isEmpty()) {
-                            messages.add(ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
-                            onPersist(ChatMessage("No times from API or text; nothing scheduled.", Sender.App))
-                            finishOnce()
+                            handleNoTimeAndStop()
                             return@launch
                         }
                         val nowMs = System.currentTimeMillis()
@@ -799,37 +833,48 @@ fun InputSection(
                             runCatching { java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli() }.getOrNull()
                         }.filter { it > nowMs }.distinct().sorted()
                         if (times.isEmpty()) {
-                            messages.add(ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
-                            onPersist(ChatMessage("No future times after validation; nothing scheduled.", Sender.App))
-                            finishOnce()
+                            handleNoTimeAndStop()
                             return@launch
                         }
 
                         val dao = AppDatabase.getDatabase(context).alarmDao()
-                        val assistantReplyOrNote = assistantReply.ifBlank { fixed.responseText.orEmpty() }
-                        for (whenMillis in times) {
-                            val row = Alarm(
-                                message = title,
-                                triggerTimeMillis = whenMillis,
-                                isRecurring = false,
-                                recurringDays = null,
-                                initialNote = assistantReplyOrNote
-                            )
-                            val newId = dao.insert(row).toInt()
+                        val assistantReplyOrNote = assistantReply.ifBlank { parsed.responseText.orEmpty() }
+                        val whenMillis = times.first()
+
+                        val row = Alarm(
+                            message = title,
+                            triggerTimeMillis = whenMillis,
+                            isRecurring = false,
+                            recurringDays = null,
+                            initialNote = assistantReplyOrNote
+                        )
+                        val newId = dao.insert(row).toInt()
+                        val scheduled = runCatching {
                             AlarmHelper.scheduleAlarmClockPublic(
                                 context, title, whenMillis, newId, assistantReplyOrNote
-                            )
+                            ); true
+                        }.getOrElse { false }
+
+                        if (scheduled) {
+                            val primary = makePrimaryTimeLine(whenMillis)
+                            messages.add(ChatMessage(primary, Sender.App)); onPersist(ChatMessage(primary, Sender.App))
+                            if (isCustomDate(whenMillis)) {
+                                val secondary = "Your reminder has been set for ${formatLocalTime(whenMillis)}."
+                                messages.add(ChatMessage(secondary, Sender.App)); onPersist(ChatMessage(secondary, Sender.App))
+                            }
+                            finishOnce()
+                            return@launch
+                        } else {
+                            val fail = "Couldn’t create your alarm. Please allow exact alarms and try again."
+                            val msg = ChatMessage(fail, Sender.App); messages.add(msg); onPersist(msg)
+                            finishOnce()
+                            return@launch
                         }
                     }
-
-                    // Success or not, flow complete
-                    finishOnce()
                 } catch (e: Exception) {
                     Log.e("ChatScreen", "Error", e)
                     val err = ChatMessage("Failed: ${e.localizedMessage ?: "Unknown error"}", Sender.App)
-                    messages.add(err)
-                    onPersist(err)
-                    finishOnce()
+                    messages.add(err); onPersist(err); finishOnce()
                 } finally {
                     onProcessingChange(false)
                 }
@@ -839,6 +884,19 @@ fun InputSection(
         }
     }
 }
+
+private fun formatLocalTime(epoch: Long): String =
+    java.time.Instant.ofEpochMilli(epoch)
+        .atZone(java.time.ZoneId.systemDefault())
+        .toLocalDateTime()
+        .let { dt ->
+            val time = dt.toLocalTime()
+            val h = time.hour % 12
+            val hour12 = if (h == 0) 12 else h
+            val m = time.minute.toString().padStart(2, '0')
+            val ampm = if (time.hour < 12) "am" else "pm"
+            "${dt.toLocalDate()} at $hour12:$m $ampm"
+        }
 
 private fun extractInnerJsonFromResponse(raw: String): String? {
     val jsonObj = runCatching { Json { ignoreUnknownKeys = true }.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null

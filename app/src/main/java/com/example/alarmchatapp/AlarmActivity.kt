@@ -56,22 +56,17 @@ class AlarmActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        if (initialNote.isNotBlank()) {
-                            // Centered marquee for the initial note
-                            Text(
-                                text = message,
-                                modifier = Modifier
-                                    .width(300.dp)
-                                    .basicMarquee(iterations = Int.MAX_VALUE),
-                                color =Color.White,
-                                style = MaterialTheme.typography.titleLarge,
-                                textAlign = TextAlign.Center,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                        // Decide what to show: initial note first, else message
+                        val displayText = if (initialNote.isNotBlank()) initialNote else message
 
-                            Spacer(Modifier.height(24.dp))
-                        }
+                        Text(
+                            text = displayText,
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleLarge,
+                            textAlign = TextAlign.Center,
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis
+                        )
 
                         Spacer(Modifier.height(28.dp))
 
