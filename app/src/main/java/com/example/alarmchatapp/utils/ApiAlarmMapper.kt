@@ -12,12 +12,45 @@ data class ApiAlarm(
     val time24: String,                 // "18:00"
     val timezone: String,               // "Asia/Calcutta"
     val recurrenceShort: List<String>?, // e.g., ["Sat","Sun"] or ["Mon"] or ["daily"]
-    val initialNote: String?
+    val initialNote: String?,
+
+    // NEW: Interval-based recurring fields
+    val intervalMinutes: Int? = null,   // e.g., 25 for "every 25 minutes"
+    val durationMinutes: Int? = null    // e.g., 180 for "for 3 hours"
 )
 
 object ApiAlarmMapper {
 
     fun toAlarmAndEpoch(api: ApiAlarm, nowMs: Long = System.currentTimeMillis()): Pair<Alarm, Long> {
+
+        // ============================================
+        // PRIORITY 1: Handle interval-based alarms
+        // ============================================
+        if (api.intervalMinutes != null && api.intervalMinutes > 0) {
+            val firstTrigger = nowMs + (api.intervalMinutes * 60 * 1000L)
+            val expiryTime = if (api.durationMinutes != null && api.durationMinutes > 0) {
+                nowMs + (api.durationMinutes * 60 * 1000L)
+            } else {
+                null // No expiry - runs indefinitely until deleted
+            }
+
+            val alarm = Alarm(
+                message = api.title.ifBlank { "Alarm" },
+                triggerTimeMillis = firstTrigger,
+                isRecurring = false, // Not day-based recurring
+                recurringDays = null,
+                initialNote = api.initialNote,
+                isIntervalBased = true,
+                intervalMinutes = api.intervalMinutes,
+                expiryTimeMillis = expiryTime
+            )
+
+            return alarm to firstTrigger
+        }
+
+        // ============================================
+        // PRIORITY 2: Handle day-based recurring alarms
+        // ============================================
         val zone = runCatching { ZoneId.of(api.timezone) }.getOrElse { ZoneId.systemDefault() }
         val parsed = OffsetDateTime.parse(api.datetimeIso, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
         val baseMs = parsed.toInstant().toEpochMilli()
@@ -59,8 +92,12 @@ object ApiAlarmMapper {
             triggerTimeMillis = firstTrigger,
             isRecurring = recurringDaysInts.isNotEmpty(),
             recurringDays = if (recurringDaysInts.isNotEmpty()) recurringDaysInts else null,
-            initialNote = api.initialNote
+            initialNote = api.initialNote,
+            isIntervalBased = false,
+            intervalMinutes = null,
+            expiryTimeMillis = null
         )
+
         return alarm to firstTrigger
     }
 }

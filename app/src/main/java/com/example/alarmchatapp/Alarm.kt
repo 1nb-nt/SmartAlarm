@@ -10,5 +10,8 @@ data class Alarm(
     val triggerTimeMillis: Long,
     val isRecurring: Boolean = false,
     val recurringDays: List<Int>? = null,
-    val initialNote: String? = null
+    val initialNote: String? = null,
+    val isIntervalBased: Boolean = false,
+    val intervalMinutes: Int? = null, // e.g., 25 for "every 25 minutes"
+    val expiryTimeMillis: Long? = null // null = no expiry, otherwise stop after this time
 )

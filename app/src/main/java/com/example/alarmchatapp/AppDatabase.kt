@@ -14,7 +14,7 @@ import com.example.alarmchatapp.chatroom.ChatMessageEntity
         ChatMessageEntity::class
         // If ScheduledTask exists in this project, re-add it here and provide its DAO.
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
