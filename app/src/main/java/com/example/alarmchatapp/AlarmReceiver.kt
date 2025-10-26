@@ -188,39 +188,63 @@ class AlarmReceiver : BroadcastReceiver() {
                     return@launch
                 }
 
-                // WEEKLY/DAILY recurrence (unchanged behavior, same semantics)
+                // ============================================
+// CASE 2: DAY-BASED RECURRING (WEEKLY/DAILY)
+// ============================================
                 if (alarm.isRecurring) {
-                    val firedCal = Calendar.getInstance().apply { timeInMillis = alarm.triggerTimeMillis }
+                    val firedCal = Calendar.getInstance().apply {
+                        timeInMillis = alarm.triggerTimeMillis
+                    }
                     val hour = firedCal.get(Calendar.HOUR_OF_DAY)
                     val minute = firedCal.get(Calendar.MINUTE)
+                    val now = System.currentTimeMillis()
+
+                    // NEW: if recurringDays is null/empty, assume the fired weekday (single-day weekly)
+                    val effectiveDays: List<Int>? = when {
+                        alarm.recurringDays?.size == 7 -> null // treat as daily
+                        alarm.recurringDays.isNullOrEmpty() -> listOf(firedCal.get(Calendar.DAY_OF_WEEK))
+                        else -> alarm.recurringDays
+                    }
+
                     val nextTrigger = when {
-                        alarm.recurringDays?.size == 7 -> {
+                        // Daily (all 7 days)
+                        effectiveDays == null -> {
                             Calendar.getInstance().apply {
-                                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-                                set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
+                                set(Calendar.SECOND, 0)
+                                set(Calendar.MILLISECOND, 0)
+                                set(Calendar.HOUR_OF_DAY, hour)
+                                set(Calendar.MINUTE, minute)
                                 if (timeInMillis <= now) add(Calendar.DAY_OF_YEAR, 1)
                             }.timeInMillis
                         }
-                        !alarm.recurringDays.isNullOrEmpty() -> {
-                            AlarmHelper.computeNextAmongDays(hour, minute, alarm.recurringDays!!)
-                        }
-                        else -> null
+                        // One or many specific weekdays (e.g., Mon) → compute next among those days
+                        else -> com.example.alarmchatapp.utils.AlarmHelper
+                            .computeNextAmongDays(hour, minute, effectiveDays)
                     }
+
                     if (nextTrigger != null) {
                         dao.update(alarm.copy(triggerTimeMillis = nextTrigger))
                         withContext(Dispatchers.Main) {
-                            AlarmHelper.scheduleAlarmClockPublic(
-                                context, alarm.message, nextTrigger, alarm.id, alarm.initialNote ?: ""
+                            com.example.alarmchatapp.utils.AlarmHelper.scheduleAlarmClockPublic(
+                                context,
+                                alarm.message,
+                                nextTrigger,
+                                alarm.id,
+                                alarm.initialNote ?: ""
                             )
                         }
-                        Log.d("AlarmReceiver", "Rescheduled recurring id=$id at $nextTrigger")
+                        Log.d("AlarmReceiver", "⏰ Rescheduled weekly/daily id=$id to $nextTrigger")
                     } else {
+                        // Should no longer happen for single-day due to effectiveDays guard
                         dao.delete(alarm)
-                        withContext(Dispatchers.Main) { AlarmHelper.cancelAlarm(context, id) }
-                        Log.d("AlarmReceiver", "No next trigger; deleted id=$id")
+                        withContext(Dispatchers.Main) {
+                            com.example.alarmchatapp.utils.AlarmHelper.cancelAlarm(context, id)
+                        }
+                        Log.d("AlarmReceiver", "⏰ No valid next trigger; deleted id=$id")
                     }
                     return@launch
                 }
+
 
                 // ONE-TIME: delete + cancel
                 dao.delete(alarm)

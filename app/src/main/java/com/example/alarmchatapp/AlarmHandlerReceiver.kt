@@ -59,19 +59,26 @@ class AlarmHandlerReceiver : BroadcastReceiver() {
                     val minute = cal.get(Calendar.MINUTE)
 
                     if (alarm.isRecurring) {
+                        // Fallback for single-day weekly: if days list is empty, assume the fired weekday
+                        val effectiveDays: List<Int>? = when {
+                            alarm.recurringDays?.size == 7 -> null // daily
+                            alarm.recurringDays.isNullOrEmpty() -> listOf(cal.get(Calendar.DAY_OF_WEEK))
+                            else -> alarm.recurringDays
+                        }
+
                         val nextTrigger = when {
-                            alarm.recurringDays?.size == 7 -> {
+                            // Daily
+                            effectiveDays == null -> {
                                 Calendar.getInstance().apply {
                                     set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
                                     set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute)
                                     if (timeInMillis <= now) add(Calendar.DAY_OF_YEAR, 1)
                                 }.timeInMillis
                             }
-                            !alarm.recurringDays.isNullOrEmpty() -> {
-                                computeNextAmongDaysLocal(hour, minute, alarm.recurringDays!!)
-                            }
-                            else -> alarm.triggerTimeMillis
+                            // One or many weekdays (includes the single-day case)
+                            else -> computeNextAmongDaysLocal(hour, minute, effectiveDays)
                         }
+
                         AlarmHelper.scheduleAlarmClockPublic(
                             context = context,
                             label = alarm.message,
@@ -82,6 +89,7 @@ class AlarmHandlerReceiver : BroadcastReceiver() {
                         restored++
                         Log.d("AlarmHandlerReceiver", "Restored weekly id=${alarm.id} -> $nextTrigger")
                     } else {
+                        // One-time: if past, roll to tomorrow same time for UI consistency
                         val trigger = if (alarm.triggerTimeMillis > now) {
                             alarm.triggerTimeMillis
                         } else {
@@ -94,7 +102,11 @@ class AlarmHandlerReceiver : BroadcastReceiver() {
                             tomorrow
                         }
                         AlarmHelper.scheduleAlarmClockPublic(
-                            context = context, label = alarm.message, triggerAt = trigger, alarmId = alarm.id, initialNote = alarm.initialNote ?: ""
+                            context = context,
+                            label = alarm.message,
+                            triggerAt = trigger,
+                            alarmId = alarm.id,
+                            initialNote = alarm.initialNote ?: ""
                         )
                         restored++
                         Log.d("AlarmHandlerReceiver", "Restored one-time id=${alarm.id} -> $trigger")
